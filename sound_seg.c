@@ -186,11 +186,7 @@ char* tr_identify(struct sound_seg* target, struct sound_seg* ad){
         }
     }
     // remove trailing newline if exists
-    if (offset > 0 && result[offset - 1] == '\n') {
-        result[offset - 1] = '\0';
-    } else {
-        result[offset] = '\0';
-    }
+    result[offset] = '\0';
     
     
     return result;
@@ -204,12 +200,33 @@ void tr_insert(struct sound_seg* src_track,
 }
 
 // int main() {
-//     struct sound_seg* track = tr_init();
-//     int16_t buffer[8000];
-//     wav_load("test.wav", buffer);
-//     tr_write(track, buffer, 0, 8000);
-//     wav_save("output.wav", track->samples, track->length);
-//     printf("Length: %zu\n", tr_length(track));
-//     tr_destroy(track);
+//     struct sound_seg* target = tr_init();
+//     struct sound_seg* ad = tr_init();
+
+//     int16_t target_samples[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5};
+//     int16_t ad_samples[] = {1, 2, 3, 4, 5};
+    
+//     target->samples = malloc(sizeof(target_samples));
+//     ad->samples = malloc(sizeof(ad_samples));
+    
+//     memcpy(target->samples, target_samples, sizeof(target_samples));
+//     memcpy(ad->samples, ad_samples, sizeof(ad_samples));
+    
+//     target->length = sizeof(target_samples) / sizeof(int16_t);
+//     ad->length = sizeof(ad_samples) / sizeof(int16_t);
+
+//     char* result = tr_identify(target, ad);
+
+//     if (result != NULL) {
+//         printf("Identified positions: \n%s", result);
+//         free(result);
+//     } else {
+//         printf("No matches found.\n");
+//     }
+
+//     // Cleanup
+//     tr_destroy(target);
+//     tr_destroy(ad);
+
 //     return 0;
 // }
