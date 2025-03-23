@@ -144,36 +144,38 @@ bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
 }
 
 // Returns a string containing <start>,<end> ad pairs in target
-char* tr_identify(struct sound_seg* target, struct sound_seg* ad){
-
-    if(ad->length == 0 || target->length < ad->length){
+char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
+    if(ad->length == 0 || target->length < ad->length) {
         char* result = malloc(1);
         result[0] = '\0';
+        return result;
     }
 
     size_t buffer_size = 128;
     char* result = malloc(buffer_size);
-    (!result)? exit(1) : 0;
+    if(!result) exit(1);
 
     size_t offset = 0;
 
-    for(size_t i = 0; i <= target->length; i++){
-        bool match = 1;
+    for(size_t i = 0; i < target->length; i++) {
+        // Ensure we do not access beyond the target length
+        if(i + ad->length > target->length) break;
 
+        bool match = 1;
         for (size_t j = 0; j < ad->length; j++) {
             if (target->samples[i + j] != ad->samples[j]) {
                 match = false;
                 break;
             }
         }
-        if(match){
+        if(match) {
             size_t start = i;
-            size_t end = i + ad->length-1;
-            
-            if(offset +30 >= buffer_size){
+            size_t end = i + ad->length - 1;
+
+            if(offset + 30 >= buffer_size) {
                 buffer_size *= 2;
-                char *temp = realloc(result, buffer_size);
-                if(!temp){
+                char* temp = realloc(result, buffer_size);
+                if(!temp) {
                     free(result);
                     return NULL;
                 }
@@ -182,15 +184,16 @@ char* tr_identify(struct sound_seg* target, struct sound_seg* ad){
 
             int written = snprintf(result + offset, buffer_size - offset, "%zu,%zu\n", start, end);
             offset += written;
-            i += ad->length -1;
+            i += ad->length - 1;
         }
     }
-    // remove trailing newline if exists
+
+    // Remove trailing newline if exists
     result[offset] = '\0';
-    
-    
+
     return result;
 }
+
 
 // Insert a portion of src_track into dest_track at position destpos
 void tr_insert(struct sound_seg* src_track,
