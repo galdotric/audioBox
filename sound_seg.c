@@ -108,7 +108,7 @@ void tr_read(struct sound_seg* track, int16_t* dest, size_t pos, size_t len) {
 void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
     size_t new_len = pos + len;
 
-    if(new_len > track -> length){
+    if(new_len > track->length){
         int16_t* new_samples = realloc(track->samples, new_len * sizeof(int16_t));
         (new_samples == NULL) ? exit(1) : 0;
 
@@ -145,7 +145,55 @@ bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
 
 // Returns a string containing <start>,<end> ad pairs in target
 char* tr_identify(struct sound_seg* target, struct sound_seg* ad){
-    return NULL;
+
+    if(ad->length == 0 || target->length < ad->length){
+        char* result = malloc(1);
+        result[0] = '\0';
+    }
+
+    size_t buffer_size = 128;
+    char* result = malloc(buffer_size);
+    (!result)? exit(1) : 0;
+
+    size_t offset = 0;
+
+    for(size_t i = 0; i <= target->length; i++){
+        bool match = 1;
+
+        for (size_t j = 0; j < ad->length; j++) {
+            if (target->samples[i + j] != ad->samples[j]) {
+                match = false;
+                break;
+            }
+        }
+        if(match){
+            size_t start = i;
+            size_t end = i + ad->length-1;
+            
+            if(offset +30 >= buffer_size){
+                buffer_size *= 2;
+                char *temp = realloc(result, buffer_size);
+                if(!temp){
+                    free(result);
+                    return NULL;
+                }
+                result = temp;
+            }
+
+            int written = sprintf(result + offset, buffer_size - offset,"%zu,%zu\n", start, end);
+            offset += written;
+            i += ad->length -1;
+        }
+    }
+    // remove trailing newline if exists
+    if (offset > 0 && result[offset - 1] == '\n') {
+        result[offset - 1] = '\0';
+    } else {
+        result[offset] = '\0';
+    }
+    
+    
+    return result;
 }
 
 // Insert a portion of src_track into dest_track at position destpos
