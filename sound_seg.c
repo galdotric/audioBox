@@ -180,7 +180,7 @@ char* tr_identify(struct sound_seg* target, struct sound_seg* ad){
                 result = temp;
             }
 
-            int written = sprintf(result + offset, buffer_size - offset,"%zu,%zu\n", start, end);
+            int written = snprintf(result + offset, buffer_size - offset, "%zu,%zu\n", start, end);
             offset += written;
             i += ad->length -1;
         }
