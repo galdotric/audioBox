@@ -94,7 +94,7 @@ void tr_destroy(struct sound_seg* obj) {
 
 // Return the length of the segment
 size_t tr_length(struct sound_seg* seg) {
-    return (size_t)-1;
+    return seg -> length;
 }
 
 // Read len elements from position pos into dest
