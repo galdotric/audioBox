@@ -237,3 +237,68 @@ void tr_insert(struct sound_seg* src_track,
 }
 
 
+
+
+// int main() {
+//     size_t size = get_wav_sample_count("test_target.wav");
+//     printf("Size of test_target.wav: %zu\n",size);
+
+//     // Test 1: tr_init and tr_length
+//     struct sound_seg* track = tr_init();
+//     printf("Test 1: tr_init - Length of empty track: %zu (expected 0)\n", tr_length(track));
+
+//     // Test 2: tr_write
+//     int16_t data[] = {1, 2, 3, 4, 5};
+//     tr_write(track, data, 0, 5);
+//     printf("Test 2: tr_write - Length after writing [1,2,3,4,5]: %zu (expected 5)\n", tr_length(track));
+
+//     // Test 3: tr_read
+//     int16_t read_buffer[5];
+//     tr_read(track, read_buffer, 0, 5);
+//     printf("Test 3: tr_read - Data: ");
+//     for (int i = 0; i < 5; i++) printf("%d ", read_buffer[i]);
+//     printf("(expected 1 2 3 4 5)\n");
+
+//     // Test 4: tr_delete_range
+//     tr_delete_range(track, 1, 2); // Remove 2, 3
+//     printf("Test 4: tr_delete_range - Length after deleting 2 samples at pos 1: %zu (expected 3)\n", tr_length(track));
+//     tr_read(track, read_buffer, 0, 3);
+//     printf("        Data: ");
+//     for (int i = 0; i < 3; i++) printf("%d ", read_buffer[i]);
+//     printf("(expected 1 4 5)\n");
+
+//     // Test 5: wav_load (assuming test_target.wav exists)
+//     int16_t wav_buffer[10000];
+//     wav_load("test_target.wav", wav_buffer);
+//     printf("Test 5: wav_load - First 5 samples from test_target.wav: ");
+//     for (int i = 0; i < 5 && i < 8000; i++) printf("%d ", wav_buffer[i]);
+//     printf("(check against file)\n");
+
+//     // Test 6: wav_save
+//     wav_save("test_output.wav", data, 5);
+//     printf("Test 6: wav_save - Saved [1,2,3,4,5] to test_output.wav (check file manually)\n");
+
+//     // Test 7: cross_correlation
+//     struct sound_seg* ad = tr_init();
+//     int16_t ad_data[] = {2, 3, 4};
+//     tr_write(ad, ad_data, 0, 3);
+//     int64_t R = cross_correlation(track, ad, 0); // Check [1,4,5] vs [2,3,4]
+//     printf("Test 7: cross_correlation - Correlation at pos 0: %ld (expected some value)\n", R);
+
+//     // Test 8: tr_identify
+//     struct sound_seg* target = tr_init();
+//     int16_t target_data[] = {1, 2, 3, 4, 5, 2, 3, 4, 6, 7};
+//     tr_write(target, target_data, 0, 10);
+//     char* result = tr_identify(target, ad);
+//     printf("Test 8: tr_identify - Ad locations: '%s' (expected :'1,3 and  5,7')\n", result);
+
+//     // Test 9: tr_destroy
+//     tr_destroy(track);
+//     tr_destroy(ad);
+//     tr_destroy(target);
+//     free(result);
+//     printf("Test 9: tr_destroy - Memory freed (no segfault means success)\n");
+
+//     return 0;
+// }
+
