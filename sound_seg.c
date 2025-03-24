@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdio.h>
 
+
+
 typedef struct{
     // RIFF Chunk Descriptor
     char chunkID[4];
@@ -32,6 +34,7 @@ struct sound_seg {
     size_t length;
 };
 
+
 // Load a WAV file into buffer
 void wav_load(const char* filename, int16_t* dest){
     FILE* file = fopen(filename, "rb");
@@ -46,6 +49,17 @@ void wav_load(const char* filename, int16_t* dest){
 
     return;
 }
+
+// Get the number of samples in the WAV file
+size_t get_wav_sample_count(char* filename){
+    FILE* file = fopen(filename, "rb");
+    waveheader header;
+    fread(&header, sizeof(waveheader), 1, file);
+
+    // Number of samples = subchunk2Size / blockAlign
+    return header.subchunk2Size / header.blockAlign;
+}
+
 
 // Create/write a WAV file from buffer
 void wav_save(const char* fname, int16_t* src, size_t len){
@@ -87,8 +101,10 @@ struct sound_seg* tr_init() {
 
 // Destroy a sound_seg object and free all allocated memory
 void tr_destroy(struct sound_seg* obj) {
-    free(obj->samples);
-    free(obj);
+    if(obj){
+        free(obj->samples);
+        free(obj);
+    }
     return;
 }
 
@@ -143,56 +159,74 @@ bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
     return true;
 }
 
+int64_t cross_correlation(struct sound_seg* target, struct sound_seg* ad, size_t k){
+    (target->samples == NULL || ad->samples == NULL) ? exit(1) : 0;
+    (k +ad->length > target->length) ? exit(1) : 0; //check if ad fits in target
+
+    int64_t R = 0;
+    size_t N = ad->length - 1;
+    for(size_t n = 0; n < N; n++){
+        int32_t t_sample = target->samples[k + n];
+        int32_t ad_sample = ad->samples[n];
+        R += t_sample * ad_sample;
+    }
+    return R;
+}
+
 // Returns a string containing <start>,<end> ad pairs in target
 char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
-    if(ad->length == 0 || target->length < ad->length) {
+
+    if(ad->length == 0 || target->length < ad->length){
+        char* result = malloc(1);
+        if(result) result[0] = '\0';
+        return result;
+    }
+    int64_t reference = cross_correlation(ad,ad,0);
+    double threshold = 0.95 * (double)reference;
+
+    size_t* starts = malloc(10 * sizeof(size_t));
+    size_t capacity = 10, count = 0;
+    size_t k = 0;
+    while(k + ad->length <= target->length){
+        int64_t R = cross_correlation(target, ad, k);
+        if((double)R >= threshold){
+            if(count == capacity){
+                capacity *= 2;
+                starts = realloc(starts, capacity * sizeof(size_t));
+            }
+            starts[count++] = k;
+            k += ad->length;
+        }else{
+            k++;
+        }
+    }
+
+    if (count == 0) {
+        free(starts);
         char* result = malloc(1);
         result[0] = '\0';
         return result;
     }
 
-    size_t buffer_size = 128;
-    char* result = malloc(buffer_size);
-    if(!result) exit(1);
-
-    size_t offset = 0;
-
-    for(size_t i = 0; i < target->length; i++) {
-        // Ensure we do not access beyond the target length
-        if(i + ad->length > target->length) break;
-
-        bool match = 1;
-        for (size_t j = 0; j < ad->length; j++) {
-            if (target->samples[i + j] != ad->samples[j]) {
-                match = false;
-                break;
-            }
-        }
-        if(match) {
-            size_t start = i;
-            size_t end = i + ad->length - 1;
-
-            if(offset + 30 >= buffer_size) {
-                buffer_size *= 2;
-                char* temp = realloc(result, buffer_size);
-                if(!temp) {
-                    free(result);
-                    return NULL;
-                }
-                result = temp;
-            }
-
-            int written = snprintf(result + offset, buffer_size - offset, "%zu,%zu\n", start, end);
-            offset += written;
-            i += ad->length - 1;
-        }
+    size_t total_len = 0;
+    for (size_t i = 0; i < count; i++) {
+        total_len += snprintf(NULL, 0, "%zu,%zu", starts[i], starts[i] + ad->length - 1);
+        if (i < count - 1) total_len += 1;
     }
 
-    // Remove trailing newline if exists
-    result[offset] = '\0';
+    char* result = malloc(total_len + 1);
+    size_t pos = 0;
+    for (size_t i = 0; i < count; i++) {
+        pos += snprintf(result + pos, total_len + 1 - pos, "%zu,%zu", starts[i], starts[i] + ad->length - 1);
+        if (i < count - 1) result[pos++] = '\n';
+    }
+    result[total_len] = '\0';
 
+    free(starts);
     return result;
+
 }
+
 
 
 // Insert a portion of src_track into dest_track at position destpos
@@ -202,34 +236,4 @@ void tr_insert(struct sound_seg* src_track,
     return;
 }
 
-// int main() {
-//     struct sound_seg* target = tr_init();
-//     struct sound_seg* ad = tr_init();
 
-//     int16_t target_samples[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5};
-//     int16_t ad_samples[] = {1, 2, 3, 4, 5};
-    
-//     target->samples = malloc(sizeof(target_samples));
-//     ad->samples = malloc(sizeof(ad_samples));
-    
-//     memcpy(target->samples, target_samples, sizeof(target_samples));
-//     memcpy(ad->samples, ad_samples, sizeof(ad_samples));
-    
-//     target->length = sizeof(target_samples) / sizeof(int16_t);
-//     ad->length = sizeof(ad_samples) / sizeof(int16_t);
-
-//     char* result = tr_identify(target, ad);
-
-//     if (result != NULL) {
-//         printf("Identified positions: \n%s", result);
-//         free(result);
-//     } else {
-//         printf("No matches found.\n");
-//     }
-
-//     // Cleanup
-//     tr_destroy(target);
-//     tr_destroy(ad);
-
-//     return 0;
-// }
