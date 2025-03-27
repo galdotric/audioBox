@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
-//#include "sound_seg.h"
+#include "sound_seg.h"
 #include <assert.h>
 
 
@@ -209,17 +209,27 @@ void tr_insert(const struct sound_seg* src_track, struct sound_seg* dest_track, 
     size_t current_pos = 0;
     size_t accumulated_length = 0;
 
-    while (dest_curr != NULL && (current_pos + dest_curr->length) <= destpos) {
+    printf("dest_curr: %p\n", dest_curr);
+    printf("dest_prev: %p\n", dest_prev);
+    printf("current_pos: %zu\n", current_pos);
+
+    while (dest_curr != NULL && (current_pos + dest_curr->length) <= destpos && dest_prev != NULL) {
         current_pos += dest_curr->length;
         dest_prev = dest_curr;
         dest_curr = dest_curr->next;
     }
 
+    //print all nesesary pointers
+    printf("after while loop\n");
+    printf("dest_curr: %p\n", dest_curr);
+    printf("dest_prev: %p\n", dest_prev);
+    printf("current_pos: %zu\n", current_pos);
+
     // 5->4->3
     // 5->3->1>3
     // 5->3->(new)->1->3
     
-    if (dest_curr == NULL) exit(1);
+    //if (dest_curr == NULL) exit(1);
     size_t split_offset = destpos - current_pos; //3
     struct sound_seg* new_segment = malloc(sizeof(struct sound_seg));
     // buiding the new seg
@@ -257,11 +267,20 @@ void tr_insert(const struct sound_seg* src_track, struct sound_seg* dest_track, 
 
     dest_curr->next = new_seg;
     new_seg->next = new_segment;
+    //print the sample values
+    printf("dest_track: ");
+    struct sound_seg* current = dest_track;
+    while (current != NULL) {
+        for (size_t i = 0; i < current->length; i++) {
+            printf("%d ", current->samples[i]);
+        }
+        current = current->next;
+    }
+    printf("\nlength: %zu\n", tr_length(dest_track));
     return;
 }
 
-#include <assert.h>
-#include <stdio.h>
+
 
 // void test_tr_insert() {
 //     // 1. Load the source WAV file (target.wav)
