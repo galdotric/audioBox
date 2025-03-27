@@ -30,17 +30,11 @@ typedef struct{
 }waveheader;
 
 
-typedef struct sample_node {
-    int16_t value;
-    struct sample_node* next;
-} sample_node;
-
 struct sound_seg {
-    sample_node* head;
+    int16_t* samples;
     size_t length;
+    struct sound_seg* next;
 };
-
-
 
 // Load a WAV file into buffer
 void wav_load(const char* filename, int16_t* dest){
@@ -99,169 +93,80 @@ void wav_save(const char* fname, int16_t* src, size_t len){
 // Initialize a new sound_seg object
 struct sound_seg* tr_init() {
     struct sound_seg* seg = malloc(sizeof(struct sound_seg));
-    if (seg == NULL) exit(1);
-    seg->head = NULL;
+    if(!seg) exit(1);
+    seg->samples = NULL;
     seg->length = 0;
-    return seg;
+    
+    return NULL;
 }
 
-
-// Destroy a sound_seg object and free all allocated memory
 void tr_destroy(struct sound_seg* obj) {
-    if (obj) {
-        sample_node* current = obj->head;
-        while (current) {
-            sample_node* tmp = current;
-            current = current->next;
-            free(tmp);
-        }
+    if(obj){
+        free(obj->samples);
         free(obj);
     }
+    return;
 }
 
+// seg1->seg2->seg3
 
-// Return the length of the segment
-size_t tr_length(struct sound_seg* seg) {
-    return seg -> length;
+size_t tr_length(struct sound_seg* track) {
+    size_t total_length = 0;
+    struct sound_seg* curr = track;
+    while (curr != NULL) {
+        total_length += curr->length;
+        curr = curr->next;
+    }
+    return total_length;
 }
 
-// Read len elements from position pos into dest
 void tr_read(struct sound_seg* track, int16_t* dest, size_t pos, size_t len) {
-    if (!track || !dest) return;
-
-    sample_node* curr = track->head;
-    size_t i = 0;
-
-    while (i < pos && curr) {
-        curr = curr->next;
-        i++;
-    }
-
-    for (i = 0; i < len && curr; i++) {
-        dest[i] = curr->value;
-        curr = curr->next;
-    }
+    if(pos+len > track->length) exit(1);
+    memcpy(dest,track->samples+pos,len*sizeof(int16_t));
+    return;
 }
 
-
-// Write len elements from src into position pos
 void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
-    if (!track || !src) return;
-
-    size_t i = 0;
-    sample_node* curr = track->head;
-    sample_node* prev = NULL;
-
-    // Traverse to pos
-    for (i = 0; i < pos && curr; i++) {
-        prev = curr;
-        curr = curr->next;
+    if(!track || !src) exit(1);
+    if(pos+len > track->length){
+        int16_t* new_track = realloc(track->samples,(pos+len)*sizeof(int16_t));
+        if(!new_track) exit(1);
+        track->samples = new_track;
+        memset(track->samples + track->length, 0, (len+pos - track->length) * sizeof(int16_t));
+        track->length = pos+len;
     }
-
-    // Add/overwrite len samples
-    for (i = 0; i < len; i++) {
-        if (curr) {
-            curr->value = src[i];
-            prev = curr;
-            curr = curr->next;
-        } else {
-            sample_node* new_node = malloc(sizeof(sample_node));
-            new_node->value = src[i];
-            new_node->next = NULL;
-            if (prev) prev->next = new_node;
-            else track->head = new_node;
-            prev = new_node;
-            track->length++;
-        }
-    }
+    memcpy(track->samples+pos,src,len*sizeof(int16_t));
+    
+    return;
 }
 
-
-// Delete a range of elements from the track
 bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
-    if (!track || pos + len > track->length) {
-        return false;
-    }
-
-    if (len == 0) {
-        return true;
-    }
-
-    sample_node* curr = track->head;
-    sample_node* prev = NULL;
-    size_t i = 0;
-
-    // Traverse to position pos
-    while (i < pos && curr) {
-        prev = curr;
-        curr = curr->next;
-        i++;
-    }
-
-    // Delete len nodes
-    for (i = 0; i < len && curr; i++) {
-        sample_node* temp = curr;
-        curr = curr->next;
-        free(temp);
-        track->length--;
-    }
-
-    // Reconnect the list
-    if (prev) {
-        prev->next = curr;
-    } else {
-        track->head = curr;
-    }
-
+    if(!track ) return false;
+    if(pos+len > track->length) return false;
+    if(len == 0) return true;
+    memmove(track->samples + pos, track->samples + pos + len, (track->length - (pos + len)) * sizeof(int16_t));
+    track->length -= len;
     return true;
 }
 
-// Compute cross-correlation between target and ad at offset k
-double cross_correlation(struct sound_seg* target, struct sound_seg* ad, size_t k) {
+double cross_correlation(struct sound_seg *target, struct sound_seg *ad, size_t k) {
     double correlation = 0.0;
-    if (!target || !ad || k + ad->length > target->length) {
-        return correlation;
+    for (size_t i = 0; i < ad->length; i++) {
+        correlation += (double)target->samples[k + i] * ad->samples[i];
     }
-
-    sample_node* target_curr = target->head;
-    sample_node* ad_curr = ad->head;
-
-    // Move target_curr to position k
-    for (size_t i = 0; i < k && target_curr; i++) {
-        target_curr = target_curr->next;
-    }
-
-    // Compute correlation
-    for (size_t i = 0; i < ad->length && target_curr && ad_curr; i++) {
-        correlation += (double)target_curr->value * ad_curr->value;
-        target_curr = target_curr->next;
-        ad_curr = ad_curr->next;
-    }
-
     return correlation;
 }
 
-// Compute autocorrelation of ad
-double autocorrelation(struct sound_seg* ad) {
+double autocorrelation(struct sound_seg *ad) {
     double correlation = 0.0;
-    if (!ad) {
-        return correlation;
+    for (size_t i = 0; i < ad->length; i++) {
+        correlation += (double)ad->samples[i] * ad->samples[i];
     }
-
-    sample_node* curr = ad->head;
-    for (size_t i = 0; i < ad->length && curr; i++) {
-        correlation += (double)curr->value * curr->value;
-        curr = curr->next;
-    }
-
     return correlation;
 }
 
-// Identify matches of ad within target
-char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
-    if (!target || !ad || target->length < ad->length) {
-        return strdup("");
-    }
+char* tr_identify(struct sound_seg *target, struct sound_seg *ad) {
+    if (!target || !ad || target->length < ad->length) return strdup("");
 
     size_t target_len = target->length;
     size_t ad_len = ad->length;
@@ -269,11 +174,9 @@ char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
     double Rxx0 = autocorrelation(ad);
     double threshold = 0.95 * Rxx0;
 
-    char* result = malloc(1024);
-    if (!result) {
-        return NULL;
-    }
-    result[0] = '\0';
+    char *result = malloc(1024);  
+    if (!result) return NULL;
+    result[0] = '\0'; 
 
     int match_found = 0;
 
@@ -281,130 +184,130 @@ char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
         double Rxy = cross_correlation(target, ad, start);
 
         if (Rxy >= threshold) {
-            if (match_found) {
-                strcat(result, "\n");
-            }
+            if (match_found) strcat(result, "\n");
             char buffer[50];
             snprintf(buffer, sizeof(buffer), "%zu,%zu", start, start + ad_len - 1);
             strcat(result, buffer);
             match_found = 1;
-            start += ad_len - 1; // Skip ahead to avoid overlapping matches
+            start += ad_len - 1; 
         }
     }
 
-    return result;
+    return result;  
 }
 
+void tr_insert(const struct sound_seg* src_track, struct sound_seg* dest_track, size_t destpos, size_t srcpos, size_t len) {
+    if (!src_track || !dest_track) exit(1);
+    if (srcpos + len > src_track->length) exit(1); 
+    if (destpos > tr_length(dest_track)) exit(1);
 
+    // Traverse to the insertion point in the destination track
+    // seg1->seg2->seg3
+    struct sound_seg* dest_prev = NULL;
+    struct sound_seg* dest_curr = dest_track;
+    size_t current_pos = 0;
+    size_t accumulated_length = 0;
 
-// Insert a portion of src_track into dest_track at position destpos
-void tr_insert(struct sound_seg* src_track,
-               struct sound_seg* dest_track,
-               size_t destpos, size_t srcpos, size_t len) {
-    if (!src_track || !dest_track || len == 0) return;
-
-    // Step 1: Extract [srcpos, srcpos + len) from src_track
-    sample_node* src_curr = src_track->head;
-    for (size_t i = 0; i < srcpos && src_curr; i++) {
-        src_curr = src_curr->next;
-    }
-
-    // Copy nodes to a temporary linked list
-    sample_node* copy_head = NULL;
-    sample_node* copy_tail = NULL;
-    for (size_t i = 0; i < len && src_curr; i++) {
-        sample_node* new_node = malloc(sizeof(sample_node));
-        new_node->value = src_curr->value;
-        new_node->next = NULL;
-
-        if (!copy_head) copy_head = new_node;
-        else copy_tail->next = new_node;
-
-        copy_tail = new_node;
-        src_curr = src_curr->next;
-    }
-
-    // Step 2: Splice into dest_track at destpos
-    sample_node* dest_curr = dest_track->head;
-    sample_node* prev = NULL;
-
-    for (size_t i = 0; i < destpos && dest_curr; i++) {
-        prev = dest_curr;
+    while (dest_curr != NULL && (current_pos + dest_curr->length) <= destpos) {
+        current_pos += dest_curr->length;
+        dest_prev = dest_curr;
         dest_curr = dest_curr->next;
     }
 
-    if (prev) {
-        prev->next = copy_head;
-    } else {
-        dest_track->head = copy_head;
+    // 5->4->3
+    // 5->3->1>3
+    // 5->3->(new)->1->3
+    
+    if (dest_curr == NULL) exit(1);
+    size_t split_offset = destpos - current_pos; //3
+    struct sound_seg* new_segment = malloc(sizeof(struct sound_seg));
+    // buiding the new seg
+    new_segment->samples = malloc(sizeof(int16_t) * (dest_curr->length - split_offset));
+    if (new_segment->samples == NULL) {
+        free(new_segment);
+        return;
     }
+    // Copy the second half of samples to the new segment
+    memcpy(new_segment->samples, dest_curr->samples + split_offset, sizeof(int16_t) * (dest_curr->length - split_offset));
+    new_segment->length = dest_curr->length - split_offset;
+    // resize dest curr
+    dest_curr->length = split_offset;
+       
+    // Link the segments
+    new_segment->next = dest_curr->next;
+    dest_curr->next = new_segment;
 
-    if (copy_tail) {
-        copy_tail->next = dest_curr;
-    }
 
-    dest_track->length += len;
+    // Create the new segment from src_track to insert
+    // 1 2 3 4 5 6 7 8
+    struct sound_seg* new_seg = malloc(sizeof(struct sound_seg));
+    if (!new_seg) exit(1);
+
+    new_seg->samples = malloc(len * sizeof(int16_t));  // Allocate memory for samples
+    if (!new_seg->samples) exit(1);
+
+    // Copy the portion of samples from src_track to the new segment
+    memcpy(new_seg->samples, src_track->samples + srcpos, len * sizeof(int16_t));
+    new_seg->length = len;
+    new_seg->next = NULL;
+
+    // 5->dest_curr->new_seg->new_segment->3
+    // ()
+
+    dest_curr->next = new_seg;
+    new_seg->next = new_segment;
+    return;
 }
 
-
-
 // int main() {
-//     // Initialize sound_seg objects
-//     struct sound_seg* target_track = tr_init();
-//     struct sound_seg* bee_track = tr_init();
+//     // Load target (1s) and bee (5s) files into raw sample arrays
+//     size_t target_len = get_wav_sample_count("target.wav");
+//     int16_t* target_samples = malloc(sizeof(int16_t) * target_len);
+//     wav_load("target.wav", target_samples);
 
-//     // Load the WAV files
-//     size_t target_sample_count = get_wav_sample_count("target.wav"); // Should be ~8000
-//     size_t bee_sample_count = get_wav_sample_count("bee.wav");      // Should be ~40000
+//     size_t bee_len = get_wav_sample_count("bee.wav");
+//     int16_t* bee_samples = malloc(sizeof(int16_t) * bee_len);
+//     wav_load("bee.wav", bee_samples);
 
-//     int16_t* target_data = malloc(target_sample_count * sizeof(int16_t));
-//     int16_t* bee_data = malloc(bee_sample_count * sizeof(int16_t));
-//     if (!target_data || !bee_data) {
-//         printf("Memory allocation failed\n");
-//         return 1;
+//     // Wrap samples in sound_seg structs
+//     struct sound_seg* target_seg = malloc(sizeof(struct sound_seg));
+//     target_seg->samples = target_samples;
+//     target_seg->length = target_len;
+//     target_seg->next = NULL;
+
+//     struct sound_seg* bee_seg = malloc(sizeof(struct sound_seg));
+//     bee_seg->samples = bee_samples;
+//     bee_seg->length = bee_len;
+//     bee_seg->next = NULL;
+
+//     // Insert 1s (target_seg) into middle of 5s (bee_seg)
+//     size_t insert_pos = bee_len / 2;
+//     tr_insert(target_seg, bee_seg, insert_pos, 0, target_len);
+
+//     // Flatten the linked segments into a continuous array to save
+//     size_t out_len = tr_length(bee_seg);
+//     int16_t* out_samples = malloc(sizeof(int16_t) * out_len);
+
+//     struct sound_seg* curr = bee_seg;
+//     size_t index = 0;
+//     while (curr) {
+//         memcpy(out_samples + index, curr->samples, curr->length * sizeof(int16_t));
+//         index += curr->length;
+//         curr = curr->next;
 //     }
 
-//     wav_load("target.wav", target_data);
-//     wav_load("bee.wav", bee_data);
+//     // Save to file
+//     wav_save("out.wav", out_samples, out_len);
 
-//     // Write data into sound_seg structures
-//     tr_write(target_track, target_data, 0, target_sample_count);
-//     tr_write(bee_track, bee_data, 0, bee_sample_count);
-
-//     // Insert 0.5 seconds (4000 samples) of bee.wav into target.wav at 0.5 seconds (4000 samples)
-//     size_t insert_pos = 4000;      // Halfway into target.wav (0.5s)
-//     size_t src_pos = 0;            // Start of bee.wav
-//     size_t len = 4000;             // 0.5 seconds of bee.wav
-//     if (insert_pos > target_sample_count) {
-//         insert_pos = target_sample_count; // Cap at end of target.wav if too large
+//     // Cleanup
+//     free(out_samples);
+//     tr_destroy(target_seg);
+//     while (bee_seg) {
+//         struct sound_seg* next = bee_seg->next;
+//         tr_destroy(bee_seg);
+//         bee_seg = next;
 //     }
-//     if (src_pos + len > bee_sample_count) {
-//         len = bee_sample_count - src_pos; // Cap len to bee.wav’s length
-//     }
-
-//     printf("Inserting %zu samples from bee.wav (pos %zu) into target.wav at pos %zu\n", 
-//            len, src_pos, insert_pos);
-//     tr_insert(bee_track, target_track, insert_pos, src_pos, len);
-
-//     // Read the modified target_track
-//     int16_t* result_data = malloc(target_track->length * sizeof(int16_t));
-//     if (!result_data) {
-//         printf("Memory allocation failed\n");
-//         return 1;
-//     }
-//     tr_read(target_track, result_data, 0, target_track->length);
-
-//     // Save the result
-//     wav_save("output.wav", result_data, target_track->length);
-//     printf("Result saved to output.wav (length: %zu samples, %.2f seconds)\n", 
-//            target_track->length, (float)target_track->length / 8000.0);
-
-//     // Clean up
-//     free(target_data);
-//     free(bee_data);
-//     free(result_data);
-//     tr_destroy(target_track);
-//     tr_destroy(bee_track);
 
 //     return 0;
 // }
+
