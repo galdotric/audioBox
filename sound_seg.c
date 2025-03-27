@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 //#include "sound_seg.h"
+#include <assert.h>
 
 
 
@@ -52,7 +53,7 @@ void wav_load(const char* filename, int16_t* dest){
 }
 
 // Get the number of samples in the WAV file
-size_t get_wav_sample_count(const char* filename){
+size_t get_wav_sample_count(char* filename){
     FILE* file = fopen(filename, "rb");
     waveheader header;
     fread(&header, sizeof(waveheader), 1, file);
@@ -93,31 +94,22 @@ void wav_save(const char* fname, int16_t* src, size_t len){
 // Initialize a new sound_seg object
 struct sound_seg* tr_init() {
     struct sound_seg* seg = malloc(sizeof(struct sound_seg));
-    if (!seg) {
-        perror("Failed to allocate sound_seg");
-        exit(1);
-    }
+    assert(seg != NULL);
     seg->samples = NULL;
     seg->length = 0;
-    seg->next = NULL;
+    seg->next = NULL;  // Initialize next pointer
     return seg;
 }
 
-// Load a WAV file into a sound_seg
-struct sound_seg* load_wav_to_seg(const char* filename) {
-    size_t sample_count = get_wav_sample_count(filename);
-    int16_t* buffer = malloc(sample_count * sizeof(int16_t));
-    if (!buffer) {
-        perror("Failed to allocate buffer for WAV samples");
-        exit(1);
+void tr_destroy(struct sound_seg* obj) {
+    if(obj){
+        free(obj->samples);
+        free(obj);
     }
-    wav_load(filename, buffer);
-    struct sound_seg* seg = tr_init();
-    seg->samples = buffer;
-    seg->length = sample_count;
-    seg->next = NULL;
-    return seg;
+    return;
 }
+
+// seg1->seg2->seg3
 
 size_t tr_length(struct sound_seg* track) {
     size_t total_length = 0;
@@ -129,217 +121,32 @@ size_t tr_length(struct sound_seg* track) {
     return total_length;
 }
 
-// Flatten a track into a single buffer for saving
-int16_t* flatten_track(struct sound_seg* track, size_t* total_len) {
-    size_t len = tr_length(track);
-    int16_t* buffer = malloc(len * sizeof(int16_t));
-    if (!buffer) {
-        perror("Failed to allocate buffer for flattening");
-        exit(1);
-    }
-    size_t offset = 0;
-    struct sound_seg* current = track;
-    while (current) {
-        memcpy(buffer + offset, current->samples, current->length * sizeof(int16_t));
-        offset += current->length;
-        current = current->next;
-    }
-    *total_len = len;
-    return buffer;
-}
-
-// Destroy a sound_seg and all linked segments
-void tr_destroy(struct sound_seg* obj) {
-    while (obj) {
-        struct sound_seg* next = obj->next;
-        free(obj->samples);
-        free(obj);
-        obj = next;
-    }
-}
-
-
-
-
 void tr_read(struct sound_seg* track, int16_t* dest, size_t pos, size_t len) {
-    if (!track || !dest) exit(1);
-
-    // Check if the requested range exceeds the total track length
-    size_t total_length = tr_length(track);
-    if (pos + len > total_length) exit(1);
-
-    size_t current_pos = 0;
-    struct sound_seg* current_seg = track;
-    
-    // Traverse to the segment containing pos
-    while (current_seg != NULL && current_pos + current_seg->length <= pos) {
-        current_pos += current_seg->length;
-        current_seg = current_seg->next;
-    }
-
-    size_t offset = pos - current_pos;  // Offset within the current segment
-    size_t remaining = len;
-    int16_t* dest_ptr = dest;
-
-    // Read samples across segments
-    while (remaining > 0 && current_seg != NULL) {
-        size_t to_copy = current_seg->length - offset;
-        if (to_copy > remaining) to_copy = remaining;
-        memcpy(dest_ptr, current_seg->samples + offset, to_copy * sizeof(int16_t));
-        dest_ptr += to_copy;
-        remaining -= to_copy;
-        offset = 0;  // Start from the beginning of the next segment
-        current_seg = current_seg->next;
-    }
-
-    // This should not happen due to the initial length check, but included for robustness
-    if (remaining > 0) exit(1);
+    if(pos+len > track->length) exit(1);
+    memcpy(dest,track->samples+pos,len*sizeof(int16_t));
+    return;
 }
 
 void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
-    if (!track || !src) exit(1);
-
-    size_t current_pos = 0;
-    struct sound_seg* current_seg = track;
-    struct sound_seg* prev_seg = NULL;
-
-    // Traverse to the segment containing pos
-    while (current_seg != NULL && current_pos + current_seg->length <= pos) {
-        current_pos += current_seg->length;
-        prev_seg = current_seg;
-        current_seg = current_seg->next;
+    if(!track || !src) exit(1);
+    if(pos+len > track->length){
+        int16_t* new_track = realloc(track->samples,(pos+len)*sizeof(int16_t));
+        if(!new_track) exit(1);
+        track->samples = new_track;
+        memset(track->samples + track->length, 0, (len+pos - track->length) * sizeof(int16_t));
+        track->length = pos+len;
     }
-
-    size_t offset = pos - current_pos;  // Offset within the current segment
-    size_t remaining = len;
-    int16_t* src_ptr = src;
-
-    while (remaining > 0) {
-        if (current_seg == NULL) {
-            // Add a new segment at the end
-            struct sound_seg* new_seg = malloc(sizeof(struct sound_seg));
-            if (!new_seg) exit(1);
-            new_seg->length = remaining;  // Size to fit remaining samples
-            new_seg->samples = malloc(new_seg->length * sizeof(int16_t));
-            if (!new_seg->samples) exit(1);
-            new_seg->next = NULL;
-            if (prev_seg) prev_seg->next = new_seg;
-            else track = new_seg;  // Update head if track was empty
-            current_seg = new_seg;
-            offset = 0;
-        }
-
-        size_t to_write = current_seg->length - offset;
-        if (to_write > remaining) to_write = remaining;
-
-        // If writing beyond the segment's current length, extend it
-        if (offset + to_write > current_seg->length) {
-            size_t new_length = offset + to_write;
-            int16_t* new_samples = realloc(current_seg->samples, new_length * sizeof(int16_t));
-            if (!new_samples) exit(1);
-            // Zero out any new space between old length and offset
-            if (current_seg->length < offset) {
-                memset(new_samples + current_seg->length, 0, 
-                       (offset - current_seg->length) * sizeof(int16_t));
-            }
-            current_seg->samples = new_samples;
-            current_seg->length = new_length;
-        }
-
-        memcpy(current_seg->samples + offset, src_ptr, to_write * sizeof(int16_t));
-        src_ptr += to_write;
-        remaining -= to_write;
-        offset = 0;  // Start from the beginning of the next segment
-        prev_seg = current_seg;
-        current_seg = current_seg->next;
-    }
+    memcpy(track->samples+pos,src,len*sizeof(int16_t));
+    
+    return;
 }
 
 bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
-    if (!track || len == 0) return len == 0;  // Success if len is 0, fail if track is NULL
-    size_t total_length = tr_length(track);
-    if (pos + len > total_length) return false;
-
-    size_t start_pos = pos;
-    size_t end_pos = pos + len - 1;
-    size_t current_pos = 0;
-    struct sound_seg* prev = NULL;
-    struct sound_seg* current = track;
-
-    // Find the start segment (S1) and offset
-    while (current != NULL && current_pos + current->length <= start_pos) {
-        current_pos += current->length;
-        prev = current;
-        current = current->next;
-    }
-    struct sound_seg* s1 = current;
-    size_t o1 = start_pos - current_pos;
-
-    // If start_pos is beyond all segments, should be caught by total_length check
-    if (!s1) return false;
-
-    // Find the end segment (S2) and offset
-    while (current != NULL && current_pos + current->length <= end_pos) {
-        current_pos += current->length;
-        prev = current;
-        current = current->next;
-    }
-    struct sound_seg* s2 = current;
-    size_t o2 = end_pos - current_pos;
-
-    if (s1 == s2) {
-        // Deletion within a single segment
-        size_t delete_count = o2 - o1 + 1;
-        if (o1 == 0 && o2 == s1->length - 1) {
-            // Remove entire segment
-            if (prev) prev->next = s1->next;
-            else track = s1->next;  // Update head
-            free(s1->samples);
-            free(s1);
-        } else {
-            // Shift samples within the segment
-            memmove(s1->samples + o1, s1->samples + o2 + 1, 
-                    (s1->length - o2 - 1) * sizeof(int16_t));
-            s1->length -= delete_count;
-        }
-    } else {
-        // Deletion across multiple segments
-        struct sound_seg* to_free = s1->next;
-
-        // Adjust or remove s1
-        if (o1 > 0) {
-            s1->length = o1;
-            s1->next = s2;
-        } else {
-            if (prev) prev->next = s2;
-            else track = s2;
-            free(s1->samples);
-            free(s1);
-        }
-
-        // Adjust or remove s2
-        if (s2 && o2 < s2->length - 1) {
-            size_t new_length = s2->length - (o2 + 1);
-            memmove(s2->samples, s2->samples + o2 + 1, new_length * sizeof(int16_t));
-            s2->length = new_length;
-        } else if (s2) {
-            struct sound_seg* s2_next = s2->next;
-            if (o1 > 0) s1->next = s2_next;
-            else if (prev) prev->next = s2_next;
-            else track = s2_next;
-            free(s2->samples);
-            free(s2);
-            s2 = NULL;
-        }
-
-        // Free intermediate segments
-        while (to_free != s2) {
-            struct sound_seg* next = to_free->next;
-            free(to_free->samples);
-            free(to_free);
-            to_free = next;
-        }
-    }
+    if(!track ) return false;
+    if(pos+len > track->length) return false;
+    if(len == 0) return true;
+    memmove(track->samples + pos, track->samples + pos + len, (track->length - (pos + len)) * sizeof(int16_t));
+    track->length -= len;
     return true;
 }
 
@@ -453,77 +260,97 @@ void tr_insert(const struct sound_seg* src_track, struct sound_seg* dest_track, 
     return;
 }
 
+#include <assert.h>
+#include <stdio.h>
 
-// int main() {
-//     // --- Ad Identification Test ---
-//     printf("Testing ad identification with ad.wav and target.wav\n");
-//     struct sound_seg* ad_seg = load_wav_to_seg("ad.wav");
-//     struct sound_seg* target_seg = load_wav_to_seg("target.wav");
-//     printf("ad.wav sample count: %zu\n", ad_seg->length);
-//     printf("target.wav sample count: %zu\n", target_seg->length);
+// void test_tr_insert() {
+//     // 1. Load the source WAV file (target.wav)
+//     struct sound_seg* src_track = malloc(sizeof(struct sound_seg));
+//     assert(src_track != NULL);
+//     src_track->length = get_wav_sample_count("target.wav");
+//     src_track->samples = malloc(src_track->length * sizeof(int16_t));
+//     assert(src_track->samples != NULL);
+//     src_track->next = NULL;
+//     wav_load("target.wav", src_track->samples);
+    
+//     // Print source file info
+//     FILE* src_file = fopen("target.wav", "rb");
+//     waveheader src_header;
+//     fread(&src_header, sizeof(waveheader), 1, src_file);
+//     fclose(src_file);
+//     printf("Source file (target.wav):\n");
+//     printf("  Sample Rate: %u Hz\n", src_header.sampleRate);
+//     printf("  Channels: %u\n", src_header.numChannels);
+//     printf("  Bits per Sample: %u\n", src_header.bitsPerSample);
+//     printf("  Sample Count: %zu\n", src_track->length);
+//     printf("  Duration: %.3f seconds\n", (float)src_track->length / src_header.sampleRate);
 
-//     char* ad_positions = tr_identify(target_seg, ad_seg);
-//     printf("Ad occurrences:\n%s\n", ad_positions);
-//     free(ad_positions); // tr_identify allocates the result string
+//     // 2. Load the destination WAV file (bee.wav)
+//     struct sound_seg* dest_track = malloc(sizeof(struct sound_seg));
+//     assert(dest_track != NULL);
+//     dest_track->length = get_wav_sample_count("bee.wav");
+//     dest_track->samples = malloc(dest_track->length * sizeof(int16_t));
+//     assert(dest_track->samples != NULL);
+//     dest_track->next = NULL;
+//     wav_load("bee.wav", dest_track->samples);
+    
+//     // Print destination file info
+//     FILE* dest_file = fopen("bee.wav", "rb");
+//     waveheader dest_header;
+//     fread(&dest_header, sizeof(waveheader), 1, dest_file);
+//     fclose(dest_file);
+//     printf("Destination file (bee.wav):\n");
+//     printf("  Sample Rate: %u Hz\n", dest_header.sampleRate);
+//     printf("  Channels: %u\n", dest_header.numChannels);
+//     printf("  Bits per Sample: %u\n", dest_header.bitsPerSample);
+//     printf("  Sample Count: %zu\n", dest_track->length);
+//     printf("  Duration: %.3f seconds\n", (float)dest_track->length / dest_header.sampleRate);
 
-//     // --- Insertion Test ---
-//     printf("\nTesting insertion with target.wav and bee.wav\n");
-//     struct sound_seg* bee_seg = load_wav_to_seg("bee.wav");
-//     printf("bee.wav sample count: %zu\n", bee_seg->length);
-
-//     // Insert 1 second (8000 samples) of bee.wav into target.wav at position 4000
-//     size_t destpos = 4000; // Middle of target.wav (assuming 8000 samples total)
-//     size_t srcpos = 0;     // Start of bee.wav
-//     size_t len = 8000;     // 1 second at 8000 Hz
-//     if (srcpos + len > bee_seg->length) {
-//         printf("Warning: Requested length exceeds bee.wav; adjusting len\n");
-//         len = bee_seg->length - srcpos;
+//     // 3. Test insertion (insert full target.wav at 2 seconds into bee.wav)
+//     size_t destpos = dest_header.sampleRate * 2;  // 2 seconds in samples (16000)
+//     size_t srcpos = 0;                            // Start of source
+//     size_t len = src_track->length;               // Full length of source (10000)
+//     if (destpos > dest_track->length) {
+//         printf("Error: Insertion position (%zu) exceeds destination length (%zu)\n", destpos, dest_track->length);
+//         goto cleanup;
 //     }
-//     tr_insert(bee_seg, target_seg, destpos, srcpos, len);
-//     printf("Inserted %zu samples from bee.wav into target.wav at position %zu\n", len, destpos);
+//     tr_insert(src_track, dest_track, destpos, srcpos, len);
 
-//     // Save the modified target_seg
-//     size_t total_len;
-//     int16_t* flattened = flatten_track(target_seg, &total_len);
-//     wav_save("inserted.wav", flattened, total_len);
-//     printf("Saved modified track as inserted.wav with %zu samples\n", total_len);
-//     free(flattened);
+//     // 4. Verify the total length
+//     size_t total_length = tr_length(dest_track);
+//     printf("Resulting total sample count: %zu\n", total_length);
+//     printf("Resulting duration: %.3f seconds\n", (float)total_length / dest_header.sampleRate);
 
-//     // --- Additional Tests (Read, Write, Delete) ---
-//     // Reload target.wav for further modifications
-//     struct sound_seg* target_seg2 = load_wav_to_seg("target.wav");
+//     // 5. Save the result
+//     int16_t* output_buffer = malloc(total_length * sizeof(int16_t));
+//     assert(output_buffer != NULL);
+    
+//     struct sound_seg* current = dest_track;
+//     size_t offset = 0;
+//     while (current != NULL) {
+//         memcpy(output_buffer + offset, current->samples, current->length * sizeof(int16_t));
+//         offset += current->length;
+//         current = current->next;
+//     }
+//     wav_save("output.wav", output_buffer, total_length);
 
-//     // Test tr_read: Read 2000 samples starting at position 1000
-//     printf("\nTesting tr_read on target.wav\n");
-//     int16_t read_buffer[2000];
-//     tr_read(target_seg2, read_buffer, 1000, 2000);
-//     printf("Read 2000 samples from position 1000\n");
-
-//     size_t samples_read = 2000; // Define and initialize samples_read
-
-//     // Test tr_write: Write the read samples back at position 0
-//     printf("Testing tr_write on target.wav\n");
-//     tr_write(target_seg2, read_buffer, 0, samples_read);
-//     printf("Wrote %zu samples to position 0\n", samples_read);
-
-//     // Test tr_delete_range: Delete 2000 samples starting at position 2000
-//     printf("Testing tr_delete_range on target.wav\n");
-//     if (tr_delete_range(target_seg2, 2000, 5000)) {
-//         size_t total_len2;
-//         int16_t* flattened2 = flatten_track(target_seg2, &total_len2);
-//         wav_save("deleted.wav", flattened2, total_len2);
-//         printf("Deleted 2000 samples from position 2000; saved as deleted.wav with %zu samples\n", total_len2);
-//         free(flattened2);
-//     } else {
-//         printf("Error: tr_delete_range failed\n");
+//     // 6. Clean up
+// cleanup:
+//     free(output_buffer);
+//     tr_destroy(src_track);
+    
+//     current = dest_track;
+//     while (current != NULL) {
+//         struct sound_seg* next = current->next;
+//         tr_destroy(current);
+//         current = next;
 //     }
 
-//     // --- Cleanup ---
-//     tr_destroy(ad_seg);
-//     tr_destroy(target_seg);
-//     tr_destroy(bee_seg);
-//     tr_destroy(target_seg2);
+//     printf("tr_insert test completed\n");
+// }
 
-//     printf("\nAll tests completed.\n");
+
+// int main(void) {
+//     test_sound_seg_operations();
 //     return 0;
 // }
