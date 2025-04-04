@@ -126,19 +126,22 @@ struct sound_seg* tr_init() {
     return seg;
 }
 
-void tr_destroy(struct sound_seg* obj) {
-    struct sound_seg* curr = obj;
-    while (curr != NULL) {
-        struct sound_seg* next = curr->next;
-        // ASM 0.3: Called at program end, so free regardless of parent status
-        // If not ASM 0.3, we’d check curr->is_parent && curr->is_child here
-        if (!curr->is_child) {  // Only free samples if not a child (not shared)
-            free(curr->samples);
+void tr_destroy(struct sound_seg* track) {
+    if (!track) return;
+
+    struct sound_seg* temp;
+    while (track) {
+        temp = track;
+        track = track->next;
+
+        // Only free 'samples' if it's not shared (i.e., is_parent == false)
+        if (!temp->is_parent) {
+            free(temp->samples); // Free dynamically allocated samples
         }
-        free(curr);
-        curr = next;
+        free(temp); // Free the struct itself
     }
 }
+
 
 // seg1->seg2->seg3
 
@@ -184,6 +187,10 @@ void tr_read(struct sound_seg* track, int16_t* dest, size_t pos, size_t len) {
 
 // Delete a range of samples from the track, respecting REQ 3.2
 bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
+    if(track->is_parent){
+        printf("Deletion failed: Track is a parent\n");
+        return false;
+    }
     if (!track) return false;
     size_t total_len = tr_length(track);
     if (pos + len > total_len) return false;
@@ -255,60 +262,69 @@ bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
 
 void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
     printf("Track writing\n");
-    if(!track || !src) exit(1);
+    if (!track || !src) exit(1);
     int total_track_length = tr_length(track);
-    print_track_data(track,"track");
-    // int16_t modify_data[] = {42};
-    // tr_write(s0, modify_data, 6, 1);
-    if(pos+len > total_track_length){
-        // need to increse the track size
-        // get to the last segment
+    print_track_data(track, "track");
+
+    if (pos + len > total_track_length) {
+        // need to increase the track size
         struct sound_seg* temp = track;
         int temp_size = 0;
-        while(temp->next){
+        while (temp->next) {
             temp_size += temp->length;
             temp = temp->next;
         }
-        // here temp is the last segment which need to be overwritten so nicrease its size 
-        int16_t* new_track = realloc(temp->samples,(temp->length+pos+len-total_track_length)*sizeof(int16_t));
-        if(!new_track) exit(1);
-        temp->samples = new_track;
-        memset(temp->samples + temp->length, 0, (len+pos - total_track_length) * sizeof(int16_t));
-        temp->length = temp->length+pos+len-total_track_length;
-        print_track_data(track,"after extention");
+        
+        // here temp is the last segment which needs to be overwritten
+        int16_t* new_track = realloc(temp->samples, (temp->length + pos + len - total_track_length) * sizeof(int16_t));
+        
+        if (new_track != temp->samples) {
+            // If realloc is successful and memory address has changed
+            if (temp->samples) {
+                free(temp->samples);  // Free old memory if it's different
+            }
+            temp->samples = new_track;
+        }
+
+        // If realloc failed, allocate fresh memory
+        if (!new_track) {
+            // Handle error, maybe return or exit gracefully
+            exit(1);
+        }
+
+        memset(temp->samples + temp->length, 0, (len + pos - total_track_length) * sizeof(int16_t));
+        temp->length = temp->length + pos + len - total_track_length;
+        print_track_data(track, "after extension");
     }
-    // now need to overwrite each segment in the linked list
+
     struct sound_seg* temp = track;
     int starting_index_temp = 0;
     int starting_index_src = 0;
     int len_to_be_copied = 0;
     int total_len_remaining = len;
-    // first go to the segment where the index is
+    
     int current_len = 0;
-    while(current_len+temp->length <= pos){
+    while (current_len + temp->length <= pos) {
         current_len += temp->length;
         temp = temp->next;
     }
-    print_track_data(temp,"temp");
+    
     starting_index_temp = pos - current_len;
     starting_index_src = 0;
-    while(temp){
-        // find the stating position in temp
-        // find the len to be copied
-        // find the stating of src (here src is continuous)
-        // memcpy(temp->samples+starting index,src+strting index of src,len to be copied)
-        len_to_be_copied = min(temp->length - starting_index_temp,total_len_remaining) ; 
-        memcpy(temp->samples+starting_index_temp,src+starting_index_src,len_to_be_copied*sizeof(int16_t));
+    while (temp) {
+        len_to_be_copied = min(temp->length - starting_index_temp, total_len_remaining); 
+        memcpy(temp->samples + starting_index_temp, src + starting_index_src, len_to_be_copied * sizeof(int16_t));
         total_len_remaining -= len_to_be_copied;
         starting_index_temp = 0;
         starting_index_src += len_to_be_copied;
         temp = temp->next;
     }
-    print_track_data(track,"after writing");
-    // memcpy(track->samples+pos,src,len*sizeof(int16_t));
-    
-    return;
+
+    print_track_data(track, "after writing");
 }
+
+
+
 
 
 double cross_correlation(struct sound_seg *target, struct sound_seg *ad, size_t k) {
@@ -467,6 +483,9 @@ int tr_check_parent_child(struct sound_seg* src_track, struct sound_seg* dest_tr
 }
 
 void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t destpos, size_t srcpos, size_t len) {
+    //mark the src and dest track as parent and child
+    src_track->is_parent = true;
+    dest_track->is_child = true;
     // Check if the insertion conditions are met
     if (!src_track || !dest_track) {
         printf("Insertion failed: Null track pointer\n");
@@ -633,7 +652,7 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
 //         printf("Delete failed: s0 is a parent\n");
 //     }
 
-//     //tr_destroy(s0);
+//     tr_destroy(s0);
 //     tr_destroy(s1);
 // }
 
