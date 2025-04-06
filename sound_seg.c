@@ -677,7 +677,7 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
     dest_track->is_parent = segment_1->is_parent;
     dest_track->next = segment_1->next;
     free(segment_1);
-    // dest_track = segment_1;
+    //// dest_track = segment_1;
     
     return;
 }
