@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
-// #include "sound_seg.h"
+#include "sound_seg.h"
 #include <assert.h>
 
 
@@ -31,13 +31,13 @@ typedef struct{
 }waveheader;
 
 
-struct sound_seg {
-    int16_t* samples;
-    size_t length;
-    struct sound_seg* next;
-    bool is_parent;
-    bool is_child;
-};
+// struct sound_seg {
+//     int16_t* samples;
+//     size_t length;
+//     struct sound_seg* next;
+//     bool is_parent;
+//     bool is_child;
+// };
 
 int min(int a, int b) {
     return (a < b) ? a : b;
@@ -47,14 +47,8 @@ int max(int a, int b) {
     return (a > b) ? a : b;
 }
 
-void print_track_data(struct sound_seg* track,char* name){
-    printf("%s: ",name);
-    while(track){
-        for(int i=0;i<track->length;i++)
-            printf("%d ",*(track->samples+i));
-        track = track->next;
-    }printf("\n");
-}
+
+
 
 
 
@@ -126,12 +120,7 @@ struct sound_seg* tr_init() {
     return seg;
 }
 
-void print_segment_data(struct sound_seg* track,char* name){
-    printf("%s: ",name);
-    for(int i=0;i<track->length;i++)
-        printf("%d ",*(track->samples+i));
-    printf("\n");
-}
+
 
 // src
 // dest
@@ -144,14 +133,12 @@ void tr_destroy(struct sound_seg* obj) {
         // ASM 0.3: Called at program end, so free regardless of parent status
         // If not ASM 0.3, we’d check curr->is_parent && curr->is_child here
         if (!curr->is_child && curr->samples != NULL) {  // Only free samples if not a child (not shared)
-            printf("not child\n");
             free(curr->samples);
         
         }
         
         free(curr);
         curr = next;
-        printf("freed\n");
     }
 }
 
@@ -273,10 +260,8 @@ bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
 
 
 void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
-    printf("Track writing\n");
     if(!track || !src) exit(1);
     int total_track_length = tr_length(track);
-    print_track_data(track,"track");
     // int16_t modify_data[] = {42};
     // tr_write(s0, modify_data, 6, 1);
     if(pos+len > total_track_length){
@@ -294,7 +279,6 @@ void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
         temp->samples = new_track;
         memset(temp->samples + temp->length, 0, (len+pos - total_track_length) * sizeof(int16_t));
         temp->length = temp->length+pos+len-total_track_length;
-        print_track_data(track,"after extention");
     }
     // now need to overwrite each segment in the linked list
     struct sound_seg* temp = track;
@@ -308,7 +292,6 @@ void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
         current_len += temp->length;
         temp = temp->next;
     }
-    print_track_data(temp,"temp");
     starting_index_temp = pos - current_len;
     starting_index_src = 0;
     while(temp){
@@ -323,7 +306,6 @@ void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
         starting_index_src += len_to_be_copied;
         temp = temp->next;
     }
-    print_track_data(track,"after writing");
     // memcpy(track->samples+pos,src,len*sizeof(int16_t));
     
     return;
@@ -381,17 +363,6 @@ char* tr_identify(struct sound_seg *target, struct sound_seg *ad) {
 
 
 
-// // Insertion conditions
-// // 1. src_track and dest_track must not be NULL.
-// // 2. srcpos + len must not exceed the length of src_track.
-// // 3. destpos must not exceed the length of dest_track.
-// int input_invalid(struct sound_seg* src_track, struct sound_seg* dest_track, 
-//                             size_t destpos, size_t srcpos, size_t len) {
-//     if (!src_track || !dest_track || srcpos +len > src_track->length || destpos > tr_length(dest_track)) {
-//         return 1;
-//     }
-//     return 0;
-// }
 
 // Helper function to get the segment containing a position and check its parent/child status
 static int is_segment_shared(struct sound_seg* track, size_t pos, int* is_parent, int* is_child) {
@@ -511,7 +482,6 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
         return;
     }
 
-    printf("insertion\n");
 
     // Traverse to the insertion point in the destination track
     struct sound_seg* dest_prev = NULL;
@@ -543,7 +513,6 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
     if (split_offset != 0) {
 
         // Split the current segment, maintaining shared data
-        printf("%d\n",split_offset);
         segment_1->samples = malloc(sizeof(int16_t)*(split_offset));
         memcpy(segment_1->samples,dest_curr->samples,sizeof(int16_t)*split_offset);
         segment_1->length = split_offset;
@@ -552,21 +521,10 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
         memcpy(segment_2->samples,dest_curr->samples+split_offset,sizeof(int16_t)*(dest_curr->length - split_offset));
         segment_2->length = dest_curr->length - split_offset;
 
-        // dest = segment_1->segment_2
         // free dest->sample (1...10)
         // tr_destroy it will free the dest cont array
         free(dest_curr->samples);
-        print_segment_data(segment_1,"segmant_1");
-        print_segment_data(segment_2,"segmant_2");
-        // segment_2->samples = dest_curr->samples + split_offset;
-        // segment_2->length = dest_curr->length - split_offset;
-        // segment_2->next = dest_curr->next;
-        //dest_curr->length = split_offset;
-        //dest_curr->next = segment_2;
     } else if (split_offset == 0 && destpos != 0) {
-        // print_segment_data(dest_curr,"dest_curr");
-        // print_segment_data(dest_prev,"dest_prev");
-        // dest_prev->next = segment_2;
         segment_1->samples = malloc(sizeof(int16_t)*(dest_prev->length));
         memcpy(segment_1->samples,dest_prev->samples,sizeof(int16_t)*dest_prev->length);
         segment_1->length = dest_prev->length;
@@ -592,26 +550,21 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
     if(is_self){
         // check if the sample is not divided
         // middle insertion
-        printf("self inserton\n");
         struct sound_seg* new_seg = malloc(sizeof(struct sound_seg));
         if (!new_seg) exit(1);
-        printf("%d %d %d\n",srcpos,len,split_offset);
         if(srcpos+len <= split_offset ){
-            printf("case1\n");
             new_seg->samples = segment_1->samples + srcpos;
             new_seg->length = len;
             new_seg->next = segment_2;
             new_seg->is_child = true;
             segment_1->next = new_seg;
         }else if(srcpos >=split_offset){
-            printf("case2\n");
             new_seg->samples = segment_2->samples + srcpos - split_offset;
             new_seg->length = len;
             new_seg->next = segment_2;
             new_seg->is_child = true;
             segment_1->next = new_seg;
         }else{
-            printf("case3\n");
             new_seg->samples = segment_1->samples + srcpos;
             new_seg->length = split_offset - srcpos;
             new_seg->is_child = true;
@@ -620,17 +573,10 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
             if (!new_seg_2) exit(1);
             new_seg_2->samples = segment_2->samples;
             new_seg_2->length = srcpos+len-split_offset;
-            printf("%d\n",new_seg_2->length);
             new_seg_2->is_child = true;
             new_seg_2->next = segment_2;
             new_seg->next = new_seg_2;
-            print_segment_data(segment_1,"seg1");
-            print_segment_data(new_seg,"newseg");
-            print_segment_data(new_seg_2,"newseg2");
-            print_segment_data(segment_2,"seg2");
         }
-        print_segment_data(segment_1,"seg_1");
-        print_segment_data(segment_2,"seg_2");
         // dest_track->is_child = true;
         dest_track->samples = segment_1->samples;
         dest_track->length = segment_1->length;
@@ -640,11 +586,6 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
         
         free(segment_1);
         return;
-        // segment_1->is_parent = true;
-
-
-
-        // || srcpos>=split_offset
     }
 
     // Create new segment with shared data from src_track
@@ -668,7 +609,6 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
     
     //set thef flags
     src_track->is_parent = true;
-    print_track_data(segment_1,"segment1");
 
     dest_track->is_child = true;
     dest_track->samples = segment_1->samples;
@@ -684,90 +624,3 @@ void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t
 
 
 
-// void test_sound_seg_operations(void) {
-   
-//     // Test 7: Self-insertion and shared backing store
-//     struct sound_seg* s0 = tr_init();
-//     int16_t initial_data[] = {8, 19, 0, -12, -15, 7};
-//     tr_write(s0, initial_data, 0, 6);
-//     print_track_data(s0,"s0 initial:");
-//     tr_insert(s0, s0, 0, 3, 1);
-//     print_track_data(s0,"s0 final:");
-//     struct sound_seg* s1 = tr_init();
-//     int16_t initial_data1[] = {1,2,3,4,5,6,7};
-//     //test parent child restriction
-//     tr_write(s1, initial_data1, 0, 7);
-//     printf("s1 length: %zu\n",tr_length(s1));
-//     printf("s0 length: %zu\n",tr_length(s0));
-//     //verify the length
-//     print_track_data(s1,"s1");
-//     print_track_data(s0,"s0");
-
-    
-    
-    
-
-
-// }
-// void test_random_operations() {
-//     struct sound_seg* s0 = tr_init();
-//     int16_t data[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-//     tr_write(s0, data, 0, 10);
-//     print_track_data(s0, "s0 initial");
-
-//     struct sound_seg* s1 = tr_init();
-//     int16_t data2[] = {1, 2, -3, 4, 5, 6, 7, 8, 9, 10};
-//     tr_write(s1, data2, 0, 10);
-//     print_track_data(s1, "s1 initial");
-
-//     // Random insertion
-//     tr_insert(s0, s0, 5, 2, 1);
-//     print_track_data(s1, "s1 after self-insert");
-
-//     // // Random read
-//     // int16_t buffer[5];
-//     // size_t read_pos = rand() % tr_length(s0);
-//     // size_t read_len = min(5, tr_length(s0) - read_pos);
-//     // tr_read(s0, buffer, read_pos, read_len);
-//     // printf("Read from %zu, len %zu: ", read_pos, read_len);
-//     // for (size_t i = 0; i < read_len; i++) printf("%d ", buffer[i]);
-//     // printf("\n");
-
-//     // // Random delete
-//     // size_t del_pos = rand() % tr_length(s0);
-//     // size_t del_len = min(3, tr_length(s0) - del_pos);
-//     // if (!tr_delete_range(s0, del_pos, del_len)) {
-//     //     printf("Delete failed at pos %zu, len %zu\n", del_pos, del_len);
-//     // } else {
-//     //     print_track_data(s0, "s0 after delete");
-//     // }
-
-//     // // Test parent protection
-//     // struct sound_seg* s1 = tr_init();
-//     // int16_t data1[] = {11, 12, 13};
-//     // tr_write(s1, data1, 0, 3);
-//     // tr_insert(s0, s1, 0, 0, 2);  // s0 becomes parent
-//     // print_track_data(s1, "s1 with s0 data");
-//     // if (!tr_delete_range(s0, 0, 2)) {
-//     //     printf("Delete failed: s0 is a parent\n");
-//     // }
-
-//     printf("destroying s1\n");
-//     tr_destroy(s1);
-//     printf("destroying s0\n");
-//     tr_destroy(s0);
-//     // tr_destroy(s1);
-// }
-
-// void test_random_operations() {
-//     struct sound_seg* s0 = tr_init();
-//     tr_write(s0, ((int16_t[]){4,7,18,-4,14,-6,8,2,20,-15,-6,-13,19,-3,-20,-14,-3,1,10,14,-12,-5,8,20,0,17,19,11,-19,-2,-3,-7,15,-19,18,-19,-5,13,14,-12,7,4,-16,-18,-11,-6,-18,6,-20,8,3,-8,3,-17,18,-6,-5,16,5,-7,14,-8,16,4,6,-6,19,1,-6,-20,19,5,-10,-16,12,18,-7,-8,-4,-6,3,-6,12,-6,-12,-4,-18,16,1,-7,-13,14,-10,15,-11,9,-6,-12,4,-8,13,10,8,-9,-7,-7,20,16,-18,16,16,-3,14,7,20}), 0, 115);
-//     tr_insert(s0, s0, 5, 57, 12);
-//     tr_write(s0, ((int16_t[]){16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,5,16,16,16,16,16,16,16,16,16}), 0, 127);
-//     tr_destroy(s0);
-// }
-
-// int main() {
-//     test_random_operations();
-//     return 0;
-// }
