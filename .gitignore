@@ -1,0 +1,7 @@
+# Build output
+*.o
+tests/test_blackbox
+tests/test_legacy
+tests/*_asan
+demo/audiobox
+demo/out/

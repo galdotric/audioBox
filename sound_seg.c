@@ -1,626 +1,450 @@
-#include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <stdio.h>
 #include "sound_seg.h"
+
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+/* ===================================================================== */
+/* WAV files                                                             */
+/* ===================================================================== */
 
-
-typedef struct{
-    // RIFF Chunk Descriptor
+typedef struct {
+    /* RIFF chunk descriptor */
     char chunkID[4];
-    uint32_t chunkSize;    
-    char format[4];        
+    uint32_t chunkSize;
+    char format[4];
+    /* fmt sub-chunk */
+    char subchunk1ID[4];
+    uint32_t subchunk1Size;
+    uint16_t audioFormat;
+    uint16_t numChannels;
+    uint32_t sampleRate;
+    uint32_t byteRate;
+    uint16_t blockAlign;
+    uint16_t bitsPerSample;
+    /* data sub-chunk */
+    char subchunk2ID[4];
+    uint32_t subchunk2Size;
+} waveheader;
 
-    // fmt Sub-chunk
-    char subchunk1ID[4];   
-    uint32_t subchunk1Size; 
-    uint16_t audioFormat;   
-    uint16_t numChannels;   
-    uint32_t sampleRate;    
-    uint32_t byteRate;      
-    uint16_t blockAlign;    
-    uint16_t bitsPerSample; 
-
-    // data Sub-chunk
-    char subchunk2ID[4];    
-    uint32_t subchunk2Size; 
-}waveheader;
-
-
-// struct sound_seg {
-//     int16_t* samples;
-//     size_t length;
-//     struct sound_seg* next;
-//     bool is_parent;
-//     bool is_child;
-// };
-
-int min(int a, int b) {
-    return (a < b) ? a : b;
-}
-
-int max(int a, int b) {
-    return (a > b) ? a : b;
-}
-
-
-
-
-
-
-// Load a WAV file into buffer
-void wav_load(const char* filename, int16_t* dest){
+/* Load the samples of a WAV file into dest. dest must hold
+ * get_wav_sample_count(filename) samples. A missing file leaves dest unchanged. */
+void wav_load(const char* filename, int16_t* dest) {
     FILE* file = fopen(filename, "rb");
+    if (!file) return;
 
     waveheader header;
-    fread(&header, sizeof(waveheader),1,file);
-
-    size_t sample_count = header.subchunk2Size/sizeof(int16_t);
-    fread(dest, sizeof(int16_t),sample_count,file);
-
+    if (fread(&header, sizeof header, 1, file) == 1) {
+        size_t count = header.subchunk2Size / sizeof(int16_t);
+        size_t got = fread(dest, sizeof(int16_t), count, file);
+        (void)got;   /* a short file simply loads fewer samples */
+    }
     fclose(file);
-
-    return;
 }
 
-// Get the number of samples in the WAV file
-size_t get_wav_sample_count(char* filename){
+/* Number of samples in a WAV file, or 0 if it can't be read. */
+size_t get_wav_sample_count(const char* filename) {
     FILE* file = fopen(filename, "rb");
-    waveheader header;
-    fread(&header, sizeof(waveheader), 1, file);
+    if (!file) return 0;
 
-    // Number of samples = subchunk2Size / blockAlign
-    return header.subchunk2Size / header.blockAlign;
+    waveheader header;
+    size_t count = 0;
+    if (fread(&header, sizeof header, 1, file) == 1 && header.blockAlign != 0)
+        count = header.subchunk2Size / header.blockAlign;
+    fclose(file);
+    return count;
 }
 
-
-// Create/write a WAV file from buffer
-void wav_save(const char* fname, int16_t* src, size_t len){
-    FILE* file = fopen(fname, "wb");
+/* Write len samples as a PCM, mono, 16-bit, 8000 Hz WAV file. */
+void wav_save(const char* filename, int16_t* src, size_t len) {
+    FILE* file = fopen(filename, "wb");
+    if (!file) return;
 
     waveheader header;
     memcpy(header.chunkID, "RIFF", 4);
     memcpy(header.format, "WAVE", 4);
     memcpy(header.subchunk1ID, "fmt ", 4);
     memcpy(header.subchunk2ID, "data", 4);
-
     header.subchunk1Size = 16;
     header.audioFormat = 1;
     header.numChannels = 1;
     header.sampleRate = 8000;
     header.bitsPerSample = 16;
-    header.byteRate = header.sampleRate * header.numChannels * header.bitsPerSample/8;
-    header.blockAlign = header.numChannels * header.bitsPerSample/8;
-    header.chunkSize = 36 + len * sizeof(int16_t);
-    header.subchunk2Size = len * sizeof(int16_t);
+    header.byteRate = header.sampleRate * header.numChannels * header.bitsPerSample / 8;
+    header.blockAlign = header.numChannels * header.bitsPerSample / 8;
+    header.subchunk2Size = (uint32_t)(len * sizeof(int16_t));
+    header.chunkSize = 36 + header.subchunk2Size;
 
-    fwrite(&header, sizeof(waveheader), 1, file);
+    fwrite(&header, sizeof header, 1, file);
     fwrite(src, sizeof(int16_t), len, file);
-
     fclose(file);
-
-    return;
 }
 
+/* ===================================================================== */
+/* Segment helpers                                                       */
+/* ===================================================================== */
 
+static size_t min_size(size_t a, size_t b) {
+    return a < b ? a : b;
+}
 
-// Initialize a new sound_seg object
-struct sound_seg* tr_init() {
-    struct sound_seg* seg = malloc(sizeof(struct sound_seg));
+static struct sound_seg* seg_new(int16_t* samples, size_t length, bool is_parent,
+                                 bool is_child, struct sound_seg* next) {
+    struct sound_seg* seg = malloc(sizeof *seg);
+    if (!seg) exit(1);
+    seg->samples = samples;
+    seg->length = length;
+    seg->next = next;
+    seg->is_parent = is_parent;
+    seg->is_child = is_child;
+    return seg;
+}
+
+static bool seg_is_shared(const struct sound_seg* seg) {
+    return seg->is_parent || seg->is_child;
+}
+
+/* Free a segment's samples if it owns them. */
+static void seg_free_samples(struct sound_seg* seg) {
+    if (!seg->is_child) free(seg->samples);
+    seg->samples = NULL;
+}
+
+/* The segment holding sample `pos` of the track, and the offset of that
+ * sample inside it. Empty segments are skipped. NULL if pos is past the end. */
+static struct sound_seg* seg_at(struct sound_seg* track, size_t pos, size_t* offset) {
+    struct sound_seg* seg = track;
+    while (seg && pos >= seg->length) {
+        pos -= seg->length;
+        seg = seg->next;
+    }
+    *offset = pos;
+    return seg;
+}
+
+/* Make `pos` a segment boundary by splitting the segment that contains it.
+ *
+ * A segment that shares its samples (parent or child) is split without
+ * copying: the new tail points into the same buffer and does not own it, so
+ * every other segment that points into that buffer stays valid. An ordinary
+ * segment is split by copying its tail into a new buffer. */
+static void split_at(struct sound_seg* track, size_t pos) {
+    size_t offset;
+    struct sound_seg* seg = seg_at(track, pos, &offset);
+    if (!seg || offset == 0) return;
+
+    size_t tail_len = seg->length - offset;
+    struct sound_seg* tail;
+    if (seg_is_shared(seg)) {
+        tail = seg_new(seg->samples + offset, tail_len, seg->is_parent, true, seg->next);
+    } else {
+        int16_t* copy = malloc(tail_len * sizeof(int16_t));
+        if (!copy) exit(1);
+        memcpy(copy, seg->samples + offset, tail_len * sizeof(int16_t));
+        tail = seg_new(copy, tail_len, false, false, seg->next);
+    }
+    seg->length = offset;
+    seg->next = tail;
+}
+
+/* Is any segment overlapping samples [pos, pos + len) shared? Only segments
+ * matching `parent_only` are considered when it is set. */
+static bool range_has_shared(struct sound_seg* track, size_t pos, size_t len, bool parent_only) {
+    size_t start = 0;
+    for (struct sound_seg* seg = track; seg && start < pos + len; seg = seg->next) {
+        size_t end = start + seg->length;
+        if (seg->length > 0 && end > pos) {
+            if (parent_only ? seg->is_parent : seg_is_shared(seg)) return true;
+        }
+        start = end;
+    }
+    return false;
+}
+
+/* ===================================================================== */
+/* Tracks                                                                */
+/* ===================================================================== */
+
+struct sound_seg* tr_init(void) {
+    struct sound_seg* seg = malloc(sizeof *seg);
     assert(seg != NULL);
     seg->samples = NULL;
     seg->length = 0;
-    seg->next = NULL;  // Initialize next pointer
+    seg->next = NULL;
     seg->is_parent = false;
     seg->is_child = false;
     return seg;
 }
 
-
-
-// src
-// dest
-// dest->sample from src->dest
-void tr_destroy(struct sound_seg* obj) {
-    struct sound_seg* curr = obj;
-    while (curr != NULL) {
-        // print_segment_data(curr,"Curr: ");
-        struct sound_seg* next = curr->next;
-        // ASM 0.3: Called at program end, so free regardless of parent status
-        // If not ASM 0.3, we’d check curr->is_parent && curr->is_child here
-        if (!curr->is_child && curr->samples != NULL) {  // Only free samples if not a child (not shared)
-            free(curr->samples);
-        
-        }
-        
-        free(curr);
-        curr = next;
+/* Free every segment of the track. Borrowed (child) samples are left to their
+ * owner. Destroy every track that borrows from a track before or after it; the
+ * borrowing track must just not be read once its source is gone. */
+void tr_destroy(struct sound_seg* track) {
+    while (track) {
+        struct sound_seg* next = track->next;
+        seg_free_samples(track);
+        free(track);
+        track = next;
     }
 }
-
-// ptr -> 1,.....,10
-// ptr free
-// 1..5 new 6...10
-
-// seg1->seg2->seg3
 
 size_t tr_length(struct sound_seg* track) {
-    size_t total_length = 0;
-    struct sound_seg* curr = track;
-    while (curr != NULL) {
-        total_length += curr->length;
-        curr = curr->next;
-    }
-    return total_length;
+    size_t total = 0;
+    for (struct sound_seg* seg = track; seg; seg = seg->next) total += seg->length;
+    return total;
 }
 
-
-// Read samples from the track across segments
 void tr_read(struct sound_seg* track, int16_t* dest, size_t pos, size_t len) {
     if (!track) exit(1);
-    if (pos + len > tr_length(track)) {  // Use total length
-        printf("Read failed: Position %zu + length %zu exceeds track length %zu\n", pos, len, tr_length(track));
+    size_t total = tr_length(track);
+    if (pos > total || len > total - pos) {
+        printf("Read failed: Position %zu + length %zu exceeds track length %zu\n", pos, len, total);
         exit(1);
     }
 
-    struct sound_seg* curr = track;
-    size_t current_pos = 0;
-    size_t dest_offset = 0;
-
-    // Traverse to the starting position
-    while (curr != NULL && current_pos + curr->length <= pos) {
-        current_pos += curr->length;
-        curr = curr->next;
-    }
-
-    // Read across segments
-    while (curr != NULL && dest_offset < len) {
-        size_t seg_start = pos - current_pos;  // Offset within current segment
-        size_t seg_len = min(curr->length - seg_start, len - dest_offset);  // Length to copy from this segment
-        memcpy(dest + dest_offset, curr->samples + seg_start, seg_len * sizeof(int16_t));
-        dest_offset += seg_len;
-        current_pos += curr->length;
-        curr = curr->next;
+    size_t offset;
+    struct sound_seg* seg = seg_at(track, pos, &offset);
+    size_t done = 0;
+    while (done < len) {
+        size_t n = min_size(seg->length - offset, len - done);
+        memcpy(dest + done, seg->samples + offset, n * sizeof(int16_t));
+        done += n;
+        offset = 0;              /* every later segment is read from its start */
+        seg = seg->next;
     }
 }
 
-// Delete a range of samples from the track, respecting REQ 3.2
+void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
+    if (!track || !src) exit(1);
+    if (len == 0) return;
+
+    /* Grow the track first if the write goes past its end. */
+    size_t total = tr_length(track);
+    if (pos + len > total) {
+        size_t extra = pos + len - total;
+        struct sound_seg* last = track;
+        while (last->next) last = last->next;
+
+        if (!seg_is_shared(last)) {
+            /* Only the owner uses this buffer, so it can be moved. */
+            int16_t* grown = realloc(last->samples, (last->length + extra) * sizeof(int16_t));
+            if (!grown) exit(1);
+            memset(grown + last->length, 0, extra * sizeof(int16_t));
+            last->samples = grown;
+            last->length += extra;
+        } else {
+            /* Other segments point into this buffer: add a new segment instead. */
+            int16_t* fresh = calloc(extra, sizeof(int16_t));
+            if (!fresh) exit(1);
+            last->next = seg_new(fresh, extra, false, false, NULL);
+        }
+    }
+
+    size_t offset;
+    struct sound_seg* seg = seg_at(track, pos, &offset);
+    size_t done = 0;
+    while (done < len) {
+        size_t n = min_size(seg->length - offset, len - done);
+        memcpy(seg->samples + offset, src + done, n * sizeof(int16_t));
+        done += n;
+        offset = 0;
+        seg = seg->next;
+    }
+}
+
 bool tr_delete_range(struct sound_seg* track, size_t pos, size_t len) {
     if (!track) return false;
-    size_t total_len = tr_length(track);
-    if (pos + len > total_len) return false;
+    size_t total = tr_length(track);
+    if (pos > total || len > total - pos) return false;
     if (len == 0) return true;
 
-    // Check if any segment in the range is a parent with children
-    struct sound_seg* curr = track;
-    size_t current_pos = 0;
-    while (curr != NULL && current_pos < pos + len) {
-        if (current_pos + curr->length > pos) {  // Segment overlaps with range
-            if (curr->is_parent) {  // Assuming is_parent implies it has children
-                printf("Deletion failed: Range contains a parent segment with children\n");
-                return false;
-            }
-        }
-        current_pos += curr->length;
-        curr = curr->next;
+    if (range_has_shared(track, pos, len, true)) {
+        printf("Deletion failed: Range contains a parent segment with children\n");
+        return false;
     }
 
-    // Find the starting segment
-    curr = track;
+    /* After these two splits the range is made of whole segments. */
+    split_at(track, pos);
+    split_at(track, pos + len);
+
+    /* Walk to position pos, then unlink whole segments until len samples are gone. */
+    size_t remaining = len;
+    size_t start = 0;
     struct sound_seg* prev = NULL;
-    current_pos = 0;
-    while (curr != NULL && current_pos + curr->length <= pos) {
-        current_pos += curr->length;
-        prev = curr;
-        curr = curr->next;
-    }
+    struct sound_seg* seg = track;
+    while (seg && remaining > 0) {
+        struct sound_seg* next = seg->next;
 
-    // Handle deletion across segments
-    size_t remaining_len = len;
-    size_t start_offset = pos - current_pos;
+        if (start < pos || seg->length == 0) {
+            start += seg->length;
+            prev = seg;
+            seg = next;
+            continue;
+        }
 
-    while (curr != NULL && remaining_len > 0) {
-        if (start_offset > 0 || remaining_len < curr->length) {
-            // Partial segment deletion
-            size_t delete_len = min(remaining_len, curr->length - start_offset);
-            memmove(curr->samples + start_offset, curr->samples + start_offset + delete_len,
-                    (curr->length - start_offset - delete_len) * sizeof(int16_t));
-            curr->length -= delete_len;
-            remaining_len -= delete_len;
-            start_offset = 0;  // Subsequent segments start at 0
+        remaining -= seg->length;   /* the splits make this a whole segment of the range */
+        if (seg != track) {
+            prev->next = next;
+            seg_free_samples(seg);
+            free(seg);
+            seg = next;
         } else {
-            // Full segment deletion
-            struct sound_seg* next = curr->next;
-            if (prev) {
-                prev->next = next;
-            } else {
-                *track = *next;  // Update head if deleting first segment
-                free(next->samples);  // Assuming next isn’t a child
+            /* The first segment is the caller's handle and must stay, so the
+             * next segment's contents are moved into it instead. */
+            seg_free_samples(track);
+            if (next) {
+                *track = *next;
                 free(next);
+            } else {
+                track->length = 0;
+                track->is_parent = false;
+                track->is_child = false;
             }
-            free(curr->samples);  // Safe if not a parent (checked above)
-            free(curr);
-            curr = next;
-            remaining_len -= curr->length;
-        }
-        if (curr) {
-            current_pos += curr->length;
-            prev = curr;
-            curr = curr->next;
         }
     }
-
     return true;
 }
 
-
-
-void tr_write(struct sound_seg* track, int16_t* src, size_t pos, size_t len) {
-    if(!track || !src) exit(1);
-    int total_track_length = tr_length(track);
-    // int16_t modify_data[] = {42};
-    // tr_write(s0, modify_data, 6, 1);
-    if(pos+len > total_track_length){
-        // need to increse the track size
-        // get to the last segment
-        struct sound_seg* temp = track;
-        int temp_size = 0;
-        while(temp->next){
-            temp_size += temp->length;
-            temp = temp->next;
-        }
-        // here temp is the last segment which need to be overwritten so nicrease its size 
-        int16_t* new_track = realloc(temp->samples,(temp->length+pos+len-total_track_length)*sizeof(int16_t));
-        if(!new_track) exit(1);
-        temp->samples = new_track;
-        memset(temp->samples + temp->length, 0, (len+pos - total_track_length) * sizeof(int16_t));
-        temp->length = temp->length+pos+len-total_track_length;
-    }
-    // now need to overwrite each segment in the linked list
-    struct sound_seg* temp = track;
-    int starting_index_temp = 0;
-    int starting_index_src = 0;
-    int len_to_be_copied = 0;
-    int total_len_remaining = len;
-    // first go to the segment where the index is
-    int current_len = 0;
-    while(current_len+temp->length <= pos){
-        current_len += temp->length;
-        temp = temp->next;
-    }
-    starting_index_temp = pos - current_len;
-    starting_index_src = 0;
-    while(temp){
-        // find the stating position in temp
-        // find the len to be copied
-        // find the stating of src (here src is continuous)
-        // memcpy(temp->samples+starting index,src+strting index of src,len to be copied)
-        len_to_be_copied = min(temp->length - starting_index_temp,total_len_remaining) ; 
-        memcpy(temp->samples+starting_index_temp,src+starting_index_src,len_to_be_copied*sizeof(int16_t));
-        total_len_remaining -= len_to_be_copied;
-        starting_index_temp = 0;
-        starting_index_src += len_to_be_copied;
-        temp = temp->next;
-    }
-    // memcpy(track->samples+pos,src,len*sizeof(int16_t));
-    
-    return;
-}
-
-
-double cross_correlation(struct sound_seg *target, struct sound_seg *ad, size_t k) {
-    double correlation = 0.0;
-    for (size_t i = 0; i < ad->length; i++) {
-        correlation += (double)target->samples[k + i] * ad->samples[i];
-    }
-    return correlation;
-}
-
-double autocorrelation(struct sound_seg *ad) {
-    double correlation = 0.0;
-    for (size_t i = 0; i < ad->length; i++) {
-        correlation += (double)ad->samples[i] * ad->samples[i];
-    }
-    return correlation;
-}
-
-char* tr_identify(struct sound_seg *target, struct sound_seg *ad) {
-    if (!target || !ad || target->length < ad->length) return strdup("");
-
-    size_t target_len = target->length;
-    size_t ad_len = ad->length;
-
-    double Rxx0 = autocorrelation(ad);
-    double threshold = 0.95 * Rxx0;
-
-    char *result = malloc(1024);  
-    if (!result) return NULL;
-    result[0] = '\0'; 
-
-    int match_found = 0;
-
-    for (size_t start = 0; start <= target_len - ad_len; start++) {
-        double Rxy = cross_correlation(target, ad, start);
-
-        if (Rxy >= threshold) {
-            if (match_found) strcat(result, "\n");
-            char buffer[50];
-            snprintf(buffer, sizeof(buffer), "%zu,%zu", start, start + ad_len - 1);
-            strcat(result, buffer);
-            match_found = 1;
-            start += ad_len - 1; 
-        }
-    }
-
-    return result;  
-}
-
-
-
-
-
-
-// Helper function to get the segment containing a position and check its parent/child status
-static int is_segment_shared(struct sound_seg* track, size_t pos, int* is_parent, int* is_child) {
-    struct sound_seg* curr = track;
-    size_t current_pos = 0;
-
-    while (curr != NULL && current_pos <= pos) {
-        if (current_pos + curr->length > pos) {
-            *is_parent = curr->is_parent;
-            *is_child = curr->is_child;
-            return 1;  // Found the segment
-        }
-        current_pos += curr->length;
-        curr = curr->next;
-    }
-    return 0;  // Position not found
-}
-
-// Helper function to get samples adjacent to destpos
-static void get_adjacent_samples(struct sound_seg* track, size_t destpos, 
-                                int16_t** before, size_t* before_len, 
-                                int16_t** after, size_t* after_len) {
-    *before = NULL;
-    *before_len = 0;
-    *after = NULL;
-    *after_len = 0;
-
-    struct sound_seg* curr = track;
-    size_t current_pos = 0;
-
-    while (curr != NULL && current_pos < destpos) {
-        current_pos += curr->length;
-        if (current_pos >= destpos) {
-            size_t offset = destpos - (current_pos - curr->length);
-            if (offset > 0) {
-                *before = curr->samples + offset - 1;  // Sample before destpos
-                *before_len = 1;
-            }
-            if (offset < curr->length) {
-                *after = curr->samples + offset;       // Sample after destpos
-                *after_len = 1;
-            }
-        }
-        curr = curr->next;
-    }
-}
-
-// Check: Parent samples and adjacent destpos samples shall not be parent or child
-int tr_check_parent_child(struct sound_seg* src_track, struct sound_seg* dest_track, 
+/* 1 if inserting src[srcpos, srcpos + len) into dest at destpos is allowed:
+ *   - the source samples must not already be shared (parent or child), and
+ *   - the dest samples on either side of destpos must not be shared. */
+int tr_check_parent_child(struct sound_seg* src_track, struct sound_seg* dest_track,
                           size_t destpos, size_t srcpos, size_t len) {
-    // Basic input validation
-    if (!src_track || !dest_track || srcpos + len > src_track->length || destpos > tr_length(dest_track)) {
-        return 0;  // Not allowed due to invalid input
-    }
+    if (!src_track || !dest_track) return 0;
+    size_t src_len = tr_length(src_track);
+    size_t dest_len = tr_length(dest_track);
+    if (srcpos > src_len || len > src_len - srcpos || destpos > dest_len) return 0;
 
-    // Check parent samples (src_track from srcpos to srcpos + len)
-    struct sound_seg* curr = src_track;
-    size_t current_pos = 0;
-    while (curr != NULL && current_pos < srcpos + len) {
-        if (current_pos + curr->length > srcpos) {
-            // Segment overlaps with the range to be inserted
-            if (curr->is_parent || curr->is_child) {
-                return 0;  // Parent samples are already shared
-            }
-        }
-        current_pos += curr->length;
-        curr = curr->next;
-    }
-
-    // Check adjacent samples
-    int16_t* adj_before = NULL;
-    int16_t* adj_after = NULL;
-    size_t before_len = 0;
-    size_t after_len = 0;
-    get_adjacent_samples(dest_track, destpos, &adj_before, &before_len, &adj_after, &after_len);
-
-    if (adj_before != NULL) {
-        int is_parent = 0, is_child = 0;
-        if (is_segment_shared(dest_track, destpos - 1, &is_parent, &is_child) && (is_parent || is_child)) {
-            return 0;  // Sample before destpos is shared
-        }
-    }
-
-    if (adj_after != NULL) {
-        int is_parent = 0, is_child = 0;
-        if (is_segment_shared(dest_track, destpos, &is_parent, &is_child) && (is_parent || is_child)) {
-            return 0;  // Sample after destpos is shared
-        }
-    }
-
-    return 1;  // Insertion allowed
+    if (range_has_shared(src_track, srcpos, len, false)) return 0;
+    if (destpos > 0 && range_has_shared(dest_track, destpos - 1, 1, false)) return 0;
+    if (destpos < dest_len && range_has_shared(dest_track, destpos, 1, false)) return 0;
+    return 1;
 }
 
-void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track, size_t destpos, size_t srcpos, size_t len) {
-    // Check if the insertion conditions are met
-    bool is_self = false;
-    if(src_track == dest_track)
-        is_self = true;
-    
+void tr_insert(struct sound_seg* src_track, struct sound_seg* dest_track,
+               size_t destpos, size_t srcpos, size_t len) {
     if (!src_track || !dest_track) {
         printf("Insertion failed: Null track pointer\n");
         exit(1);
     }
-    if (srcpos + len > tr_length(src_track)) {  // Use total length
+    size_t src_len = tr_length(src_track);
+    if (srcpos > src_len || len > src_len - srcpos) {
         printf("Insertion failed: Source position out of bounds\n");
-        printf("Source position: %zu, Length: %zu, Total track length: %zu\n", srcpos, len, tr_length(src_track));
+        printf("Source position: %zu, Length: %zu, Total track length: %zu\n", srcpos, len, src_len);
         exit(1);
     }
     if (destpos > tr_length(dest_track)) {
         printf("Insertion failed: Destination position out of bounds\n");
         exit(1);
     }
-
-    // Check parent-child conditions
+    if (len == 0) return;
     if (!tr_check_parent_child(src_track, dest_track, destpos, srcpos, len)) {
         printf("Insertion failed: Parent samples or adjacent samples are already parent or child\n");
         return;
     }
 
+    /* 1. Make destpos a segment boundary. Splitting never moves samples to a
+     *    different position, so srcpos is still right for a self-insert. */
+    split_at(dest_track, destpos);
 
-    // Traverse to the insertion point in the destination track
-    struct sound_seg* dest_prev = NULL;
-    struct sound_seg* dest_curr = dest_track;
-    size_t current_pos = 0;
-
-    while (dest_curr != NULL && (current_pos + dest_curr->length) <= destpos) {
-        current_pos += dest_curr->length;
-        dest_prev = dest_curr;
-        dest_curr = dest_curr->next;
+    /* 2. Build a chain of child segments that point into the source samples,
+     *    one per source segment the range touches. */
+    struct sound_seg* chain = NULL;
+    struct sound_seg* chain_end = NULL;
+    size_t offset;
+    struct sound_seg* seg = seg_at(src_track, srcpos, &offset);
+    for (size_t done = 0; done < len; seg = seg->next, offset = 0) {
+        size_t n = min_size(seg->length - offset, len - done);
+        if (n == 0) continue;
+        struct sound_seg* child = seg_new(seg->samples + offset, n, false, true, NULL);
+        if (chain_end) chain_end->next = child; else chain = child;
+        chain_end = child;
+        seg->is_parent = true;
+        done += n;
     }
 
-    struct sound_seg* segment_2 = malloc(sizeof(struct sound_seg));
-    if (!segment_2) exit(1);
-    
-    segment_2->samples = NULL;
-    segment_2->next = NULL;
-    segment_2->length = 0;
-
-    struct sound_seg* segment_1 = malloc(sizeof(struct sound_seg));
-    if (!segment_1) exit(1);
-    
-    segment_1->samples = NULL;
-    segment_1->next = NULL;
-    segment_1->length = 0;
-
-    size_t split_offset = destpos - current_pos;
-    
-    if (split_offset != 0) {
-
-        // Split the current segment, maintaining shared data
-        segment_1->samples = malloc(sizeof(int16_t)*(split_offset));
-        memcpy(segment_1->samples,dest_curr->samples,sizeof(int16_t)*split_offset);
-        segment_1->length = split_offset;
-        
-        segment_2->samples = malloc(sizeof(int16_t)*(dest_curr->length - split_offset));
-        memcpy(segment_2->samples,dest_curr->samples+split_offset,sizeof(int16_t)*(dest_curr->length - split_offset));
-        segment_2->length = dest_curr->length - split_offset;
-
-        // free dest->sample (1...10)
-        // tr_destroy it will free the dest cont array
-        free(dest_curr->samples);
-    } else if (split_offset == 0 && destpos != 0) {
-        segment_1->samples = malloc(sizeof(int16_t)*(dest_prev->length));
-        memcpy(segment_1->samples,dest_prev->samples,sizeof(int16_t)*dest_prev->length);
-        segment_1->length = dest_prev->length;
-        segment_1->is_child = dest_prev->is_child;
-        segment_1->is_parent = dest_prev->is_parent;
-        segment_1->next = dest_prev->next;
-        free(dest_prev->samples);
-    } else if(split_offset ==0 && destpos == 0){
-        //seg1->(new)->seg2
-        segment_2->samples = malloc(sizeof(int16_t)*(dest_curr->length));
-        memcpy(segment_2->samples,dest_curr->samples,sizeof(int16_t)*dest_curr->length);
-        segment_2->length = dest_curr->length;
-        segment_2->is_child = dest_curr->is_child;
-        segment_2->is_parent = dest_curr->is_parent;
-        segment_2->next = dest_curr->next;
-        segment_1->next = segment_2;
-        free(dest_curr->samples);
-
-    }
-
-    // dest_track = seg1->(new)seg2
-    // if self insertion new_seg is build diffrently
-    if(is_self){
-        // check if the sample is not divided
-        // middle insertion
-        struct sound_seg* new_seg = malloc(sizeof(struct sound_seg));
-        if (!new_seg) exit(1);
-        if(srcpos+len <= split_offset ){
-            new_seg->samples = segment_1->samples + srcpos;
-            new_seg->length = len;
-            new_seg->next = segment_2;
-            new_seg->is_child = true;
-            segment_1->next = new_seg;
-        }else if(srcpos >=split_offset){
-            new_seg->samples = segment_2->samples + srcpos - split_offset;
-            new_seg->length = len;
-            new_seg->next = segment_2;
-            new_seg->is_child = true;
-            segment_1->next = new_seg;
-        }else{
-            new_seg->samples = segment_1->samples + srcpos;
-            new_seg->length = split_offset - srcpos;
-            new_seg->is_child = true;
-            segment_1->next = new_seg;
-            struct sound_seg* new_seg_2 = malloc(sizeof(struct sound_seg));
-            if (!new_seg_2) exit(1);
-            new_seg_2->samples = segment_2->samples;
-            new_seg_2->length = srcpos+len-split_offset;
-            new_seg_2->is_child = true;
-            new_seg_2->next = segment_2;
-            new_seg->next = new_seg_2;
+    /* 3. Link the chain in at destpos. */
+    if (destpos == 0) {
+        /* The first segment is the caller's handle, so it stays first: its
+         * contents move to a new segment that follows the chain. */
+        if (dest_track->length > 0) {
+            chain_end->next = seg_new(dest_track->samples, dest_track->length,
+                                      dest_track->is_parent, dest_track->is_child,
+                                      dest_track->next);
+            dest_track->samples = NULL;
+            dest_track->length = 0;
+            dest_track->is_parent = false;
+            dest_track->is_child = false;
+        } else {
+            chain_end->next = dest_track->next;
         }
-        // dest_track->is_child = true;
-        dest_track->samples = segment_1->samples;
-        dest_track->length = segment_1->length;
-        dest_track->is_child = segment_1->is_child;
-        dest_track->is_parent = segment_1->is_parent;
-        dest_track->next = segment_1->next;
-        
-        free(segment_1);
-        return;
+        dest_track->next = chain;
+    } else {
+        struct sound_seg* before = dest_track;
+        size_t end = before->length;
+        while (end < destpos) {
+            before = before->next;
+            end += before->length;
+        }
+        chain_end->next = before->next;
+        before->next = chain;
     }
-
-    // Create new segment with shared data from src_track
-    struct sound_seg* new_seg = malloc(sizeof(struct sound_seg));
-    if (!new_seg) exit(1);
-
-    // 1....10 p c
-    // 1.5 6 7.10
-
-    // 1..10 s0 c 11..15..20 s1 p
-    // 1..5->15->6..10
-    // s0 s1
-
-    // Share the same data portion (no copying)
-    new_seg->samples = src_track->samples + srcpos;
-    new_seg->length = len;
-    new_seg->next = segment_2;
-    new_seg->is_child = true;
-
-    segment_1->next = new_seg;
-    
-    //set thef flags
-    src_track->is_parent = true;
-
-    dest_track->is_child = true;
-    dest_track->samples = segment_1->samples;
-    dest_track->length = segment_1->length;
-    dest_track->is_child = segment_1->is_child;
-    dest_track->is_parent = segment_1->is_parent;
-    dest_track->next = segment_1->next;
-    free(segment_1);
-    //// dest_track = segment_1;
-    
-    return;
 }
 
+/* ===================================================================== */
+/* Ad detection                                                          */
+/* ===================================================================== */
 
+static int16_t* tr_flatten(struct sound_seg* track, size_t* len) {
+    *len = tr_length(track);
+    int16_t* buf = malloc((*len ? *len : 1) * sizeof(int16_t));
+    if (!buf) exit(1);
+    tr_read(track, buf, 0, *len);
+    return buf;
+}
 
+/* Find where `ad` occurs in `target`. A match is an offset k where the
+ * cross-correlation of target[k...] with ad is at least 95% of ad's
+ * correlation with itself. Matches don't overlap.
+ *
+ * Returns a new string (caller frees) with one "start,end" line per match,
+ * inclusive, or "" if there are none. */
+char* tr_identify(struct sound_seg* target, struct sound_seg* ad) {
+    if (!target || !ad) return strdup("");
+
+    size_t t_len, a_len;
+    int16_t* t = tr_flatten(target, &t_len);
+    int16_t* a = tr_flatten(ad, &a_len);
+
+    size_t cap = 64, used = 0;
+    char* result = malloc(cap);
+    if (!result) exit(1);
+    result[0] = '\0';
+
+    if (a_len > 0 && a_len <= t_len) {
+        double self = 0.0;
+        for (size_t i = 0; i < a_len; i++) self += (double)a[i] * a[i];
+        double threshold = 0.95 * self;
+
+        for (size_t k = 0; k + a_len <= t_len; k++) {
+            double cross = 0.0;
+            for (size_t i = 0; i < a_len; i++) cross += (double)t[k + i] * a[i];
+            if (cross < threshold) continue;
+
+            char line[48];
+            int n = snprintf(line, sizeof line, "%s%zu,%zu", used ? "\n" : "", k, k + a_len - 1);
+            while (used + (size_t)n + 1 > cap) {
+                result = realloc(result, cap *= 2);
+                if (!result) exit(1);
+            }
+            memcpy(result + used, line, (size_t)n + 1);
+            used += (size_t)n;
+            k += a_len - 1;     /* skip past this match */
+        }
+    }
+
+    free(t);
+    free(a);
+    return result;
+}

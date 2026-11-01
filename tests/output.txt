@@ -1,0 +1,85 @@
+Black-box tests
+===============
+[PASS   ] init: new track is empty
+[PASS   ] destroy: NULL is ignored
+[PASS   ] write: then read back
+[PASS   ] write: overwrite the middle
+[PASS   ] write: append at the end
+[PASS   ] write: overlapping the end extends the track
+[PASS   ] write: past the end fills the gap with zeros
+[PASS   ] write: 0 samples to an empty track            [B11]
+[PASS   ] write: 0 samples changes nothing
+[PASS   ] write: NULL source exits with 1
+[PASS   ] write: across segments, through a share
+[PASS   ] write: extend a track ending in a shared piece [B10]
+[PASS   ] write: extend a source that is shared          [B10]
+[PASS   ] read: a range in the middle
+[PASS   ] read: 0 samples
+[PASS   ] read: past the end exits with 1
+[PASS   ] insert: into the middle                        [B1]
+[PASS   ] insert: at the start
+[PASS   ] insert: at the end
+[PASS   ] insert: into an empty track                    [B7]
+[PASS   ] insert: 0 samples changes nothing
+[PASS   ] insert: writing the source changes the copy
+[PASS   ] insert: writing the copy changes the source
+[PASS   ] insert: at the end of a multi-segment track    [B6]
+[PASS   ] insert: on a segment boundary keeps the tail   [B5]
+[PASS   ] insert: source range in a later segment        [B8]
+[PASS   ] insert: source range spanning two segments     [B8]
+[PASS   ] insert: a source that is already shared is refused
+[PASS   ] insert: next to shared samples is refused
+[PASS   ] insert: source range past the end exits with 1
+[PASS   ] insert: position past the end exits with 1
+[PASS   ] self-insert: into the middle
+[PASS   ] self-insert: at the end
+[PASS   ] self-insert: at the start
+[PASS   ] self-insert: source range around the insert point
+[PASS   ] self-insert: the copy is shared
+[PASS   ] self-insert: the source can't be deleted       [B9]
+[PASS   ] self-insert: source in a later segment         [B8]
+[PASS   ] check: allows a clean insert
+[PASS   ] check: refuses a shared source
+[PASS   ] check: uses the whole source length            [B12]
+[PASS   ] delete: from the middle
+[PASS   ] delete: everything, then write again
+[PASS   ] delete: 0 samples
+[PASS   ] delete: past the end returns false
+[PASS   ] delete: the whole first segment                [B3]
+[PASS   ] delete: a whole inserted segment               [B2 B4]
+[PASS   ] delete: across three segments                  [B2]
+[PASS   ] delete: part of an inserted piece              [B4]
+[PASS   ] delete: a shared source returns false
+[PASS   ] destroy: either order
+[PASS   ] identify: one match
+[PASS   ] identify: two matches
+[PASS   ] identify: no match
+[PASS   ] identify: ad longer than target
+[PASS   ] identify: match outside the first segment      [B13]
+[PASS   ] identify: 400 matches                          [B13]
+[PASS   ] wav: save then load
+[PASS   ] wav: header is 8 kHz mono 16-bit
+[PASS   ] wav: missing file                              [B14]
+
+60/60 tests passed
+
+Legacy tests (ported from the original test.c)
+==============================================
+[PASS   ] legacy 01: tr_init basic initialisation
+[PASS   ] legacy 02: tr_length of an empty track
+[PASS   ] legacy 03: tr_length of a multi-segment track
+[PASS   ] legacy 04: tr_write to an empty track
+[PASS   ] legacy 05: tr_write extends the track
+[PASS   ] legacy 06: tr_write past the end pads with zeros
+[PASS   ] legacy 07: tr_insert from another track at the start
+[PASS   ] legacy 08: tr_insert self, middle
+[PASS   ] legacy 09: tr_write after tr_insert
+[PASS   ] legacy 10: tr_insert self, at the end
+[PASS   ] legacy 11: tr_insert self, at the start
+[PASS   ] legacy 12: tr_check_parent_child refuses a parent
+[PASS   ] legacy 13: tr_check_parent_child allows a clean source
+[PASS   ] legacy 14: tr_read across segments
+[PASS   ] legacy 15: tr_write with a NULL source exits
+
+15/15 tests passed
+

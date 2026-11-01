@@ -1,43 +1,38 @@
-# Compiler to use
-CC = gcc
+CC      = gcc
+CFLAGS  = -std=c11 -Wall -Wextra -g -D_DEFAULT_SOURCE -I.
+SAN     = -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 
-# Compiler flags
-CFLAGS = -Wall -g
+TESTS   = tests/test_blackbox tests/test_legacy
 
-# Target executable name
-TARGET = sound_test
+.PHONY: all demo test test-asan output clean
 
-# Source files
-SOURCES = sound_seg.c test.c
+all: $(TESTS) demo/audiobox
 
-# Object files
-OBJECTS = sound_seg.o test.o
+# The command-line program: run it with no arguments for the demo.
+demo/audiobox: demo/audiobox.c sound_seg.c sound_seg.h
+	$(CC) $(CFLAGS) demo/audiobox.c sound_seg.c -lm -o $@
 
-# Header files
-HEADERS = sound_seg.h
+demo: demo/audiobox
+	./demo/audiobox
 
-# Default target
-all: $(TARGET)
+tests/%: tests/%.c sound_seg.c sound_seg.h tests/harness.h
+	$(CC) $(CFLAGS) $< sound_seg.c -o $@
 
-# Link object files to create executable
-$(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -o $(TARGET)
+tests/%_asan: tests/%.c sound_seg.c sound_seg.h tests/harness.h
+	$(CC) $(CFLAGS) $(SAN) $< sound_seg.c -o $@
 
-# Compile sound_seg.c to object file
-sound_seg.o: sound_seg.c $(HEADERS)
-	$(CC) $(CFLAGS) -c sound_seg.c
+# Run both suites.
+test: $(TESTS)
+	@status=0; for t in $(TESTS); do ./$$t || status=1; echo; done; exit $$status
 
-# Compile test.c to object file
-test.o: test.c $(HEADERS)
-	$(CC) $(CFLAGS) -c test.c
+# Run both suites with AddressSanitizer and UBSan (memory errors show as CRASH).
+test-asan: $(TESTS:=_asan)
+	@status=0; for t in $(TESTS:=_asan); do ./$$t || status=1; echo; done; exit $$status
 
-# Run the program
-run: $(TARGET)
-	./$(TARGET)
+# Regenerate tests/output.txt from a sanitizer run.
+output: $(TESTS:=_asan)
+	@$(MAKE) -s test-asan > tests/output.txt; cat tests/output.txt
 
-# Clean up
 clean:
-	rm -f $(OBJECTS) $(TARGET)
-
-# Phony targets
-.PHONY: all run clean
+	rm -f $(TESTS) $(TESTS:=_asan) demo/audiobox *.o
+	rm -rf demo/out
